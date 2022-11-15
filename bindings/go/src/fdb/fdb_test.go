@@ -25,6 +25,7 @@ package fdb_test
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -348,6 +349,7 @@ func ExampleOpenWithConnectionString() {
 	clusterFileContent, err := os.ReadFile(os.Getenv("FDB_CLUSTER_FILE"))
 	if err != nil {
 		fmt.Printf("Unable to read cluster file: %v\n", err)
+		return
 	}
 
 	// OpenWithConnectionString opens the database described by the connection string
@@ -546,15 +548,3 @@ func TestInvalidPrefixTenant(t *testing.T) {
 	err = db.CreateTenant(testTenantName)
 	assertErrorCodeEqual(t, err, errTenantNameInvalid)
 }
-=======
-	db, e := fdb.OpenWithConnectionString("")
-	if e != nil {
-		fmt.Printf("Unable to open database: %v\n", e)
-		return
-	}
-
-	_ = db
-
-	// Output:
-}
->>>>>>> 65a61d656 (Allow to create database in go bindings with connection string)
