@@ -1,3 +1,13 @@
+## DataDog Release of FoundationDB
+
+All changes should be cherry picked onto this branch from another branch based
+on main.
+
+Current differences from 7.2 release
+* Support for OpenWithConnectionString in Go bindings
+* Support for OpenTenant and others in Go bindings
+* Fix for race condition when opening databases from the cache in Go bindings
+
 <img alt="FoundationDB logo" src="documentation/FDB_logo.png?raw=true" width="400">
 
 ![Build Status](https://codebuild.us-west-2.amazonaws.com/badges?uuid=eyJlbmNyeXB0ZWREYXRhIjoiVjVzb1RQNUZTaGxGNm9iUnk4OUZ1d09GdTMzZnVOT1YzaUU1RU1xR2o2TENRWFZjb3ZrTHJEcngrZVdnNE40bXJJVDErOGVwendIL3lFWFY3Y3oxQmdjPSIsIml2UGFyYW1ldGVyU3BlYyI6IlJUbWhnaUlJVXRORUNJTjQiLCJtYXRlcmlhbFNldFNlcmlhbCI6MX0%3D&branch=main)
