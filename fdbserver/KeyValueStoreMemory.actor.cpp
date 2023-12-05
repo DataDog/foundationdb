@@ -33,6 +33,8 @@
 #include "flow/ActorCollection.h"
 #include "flow/EncryptUtils.h"
 #include "flow/Knobs.h"
+#include "fdbclient/S3BlobStore.h"
+
 #include "flow/actorcompiler.h" // This must be the last #include.
 
 #define OP_DISK_OVERHEAD (sizeof(OpHeader) + 1)
@@ -1035,6 +1037,21 @@ private:
 		return static_cast<IKeyValueStore*>(self)->readRange(keys, rowLimit, byteLimit, options).get();
 	}
 	ACTOR static Future<Void> waitAndCommit(KeyValueStoreMemory* self, bool sequential) {
+        std::string resource;
+        std::string error;
+        std::string blobstoreURI = "blobstore://minioadmin:minioadmin@127.0.0.1:9000?bucket=test-fdb-bucket&secure_connection=0&region=us-east-1";
+        S3BlobStoreEndpoint::ParametersT parameters;
+        Reference<S3BlobStoreEndpoint> s3 = S3BlobStoreEndpoint::fromString(blobstoreURI, {}, &resource, &error, &parameters);
+
+		S3BlobStoreEndpoint::ListResult contents = wait(s3->listObjects("test-fdb-bucket"));
+		std::vector<std::string> results;
+		for (const auto& f : contents.objects) {
+				TraceEvent("ListKeys", self->id).detail("name", f.name);
+        }
+
+
+	    TraceEvent(SevError, "S3SSInitSuccess", self->id).detail("Reason", "connected to S3");
+
 		wait(self->recovering);
 		wait(self->commit(sequential));
 		return Void();

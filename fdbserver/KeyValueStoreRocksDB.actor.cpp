@@ -63,6 +63,8 @@
 
 #endif // SSD_ROCKSDB_EXPERIMENTAL
 
+#include "fdbclient/S3BlobStore.h"
+
 #include "fdbserver/Knobs.h"
 #include "fdbclient/IKeyValueStore.h"
 #include "fdbserver/RocksDBCheckpointUtils.actor.h"
@@ -1846,6 +1848,8 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 
 	explicit RocksDBKeyValueStore(const std::string& path, UID id)
 	  : id(id), sharedState(std::make_shared<SharedRocksDBState>(id)), path(path),
+        
+
 	    perfContextMetrics(new PerfContextMetrics()),
 	    readIterPool(new ReadIteratorPool(id, db, defaultFdbCF, sharedState)),
 	    readSemaphore(SERVER_KNOBS->ROCKSDB_READ_QUEUE_SOFT_MAX),
@@ -2049,6 +2053,10 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	}
 
 	Future<Void> init() override {
+        
+    // TODO(griffin): impl init s3 bucket
+    // hard code bucket uri to minio?
+
 		if (openFuture.isValid()) {
 			return openFuture;
 		}
@@ -2151,6 +2159,8 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	Future<Void> canCommit() override { return checkRocksdbState(this); }
 
 	ACTOR Future<Void> commitInRocksDB(RocksDBKeyValueStore* self) {
+
+
 		// If there is nothing to write, don't write.
 		if (self->writeBatch == nullptr) {
 			return Void();
@@ -2570,13 +2580,8 @@ IKeyValueStore* keyValueStoreRocksDB(std::string const& path,
                                      KeyValueStoreType storeType,
                                      bool checkChecksums,
                                      bool checkIntegrity) {
-#ifdef SSD_ROCKSDB_EXPERIMENTAL
-	return new RocksDBKeyValueStore(path, logID);
-#else
-	TraceEvent(SevError, "RocksDBEngineInitFailure", logID).detail("Reason", "Built without RocksDB");
-	ASSERT(false);
-	return nullptr;
-#endif // SSD_ROCKSDB_EXPERIMENTAL
+
+    return new RocksDBKeyValueStore(path, logID);
 }
 
 #ifdef SSD_ROCKSDB_EXPERIMENTAL
