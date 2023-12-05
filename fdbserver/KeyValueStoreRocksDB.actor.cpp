@@ -2060,73 +2060,11 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	}
 
 	void set(KeyValueRef kv, const Arena*) override {
-		if (writeBatch == nullptr) {
-			writeBatch.reset(new rocksdb::WriteBatch());
-			keysSet.clear();
-			maxDeletes = SERVER_KNOBS->ROCKSDB_SINGLEKEY_DELETES_MAX;
-		}
-		ASSERT(defaultFdbCF != nullptr);
-		writeBatch->Put(defaultFdbCF, toSlice(kv.key), toSlice(kv.value));
-		if (SERVER_KNOBS->ROCKSDB_SINGLEKEY_DELETES_ON_CLEARRANGE) {
-			keysSet.insert(kv.key);
-		}
+
 	}
 
 	void clear(KeyRangeRef keyRange, const Arena*) override {
-		if (writeBatch == nullptr) {
-			writeBatch.reset(new rocksdb::WriteBatch());
-			keysSet.clear();
-			maxDeletes = SERVER_KNOBS->ROCKSDB_SINGLEKEY_DELETES_MAX;
-		}
 
-		ASSERT(defaultFdbCF != nullptr);
-		// Number of deletes to rocksdb = counters.deleteKeyReqs + convertedDeleteKeyReqs;
-		// Number of deleteRanges to rocksdb = counters.deleteRangeReqs - counters.convertedDeleteRangeReqs;
-		if (keyRange.singleKeyRange() && !SERVER_KNOBS->ROCKSDB_FORCE_DELETERANGE_FOR_CLEARRANGE) {
-			writeBatch->Delete(defaultFdbCF, toSlice(keyRange.begin));
-			++counters.deleteKeyReqs;
-			--maxDeletes;
-		} else {
-			++counters.deleteRangeReqs;
-			if (SERVER_KNOBS->ROCKSDB_SINGLEKEY_DELETES_ON_CLEARRANGE &&
-			    !SERVER_KNOBS->ROCKSDB_FORCE_DELETERANGE_FOR_CLEARRANGE && maxDeletes > 0) {
-				++counters.convertedDeleteRangeReqs;
-				rocksdb::ReadOptions readOptions = sharedState->getReadOptions();
-				auto beginSlice = toSlice(keyRange.begin);
-				auto endSlice = toSlice(keyRange.end);
-				readOptions.iterate_lower_bound = &beginSlice;
-				readOptions.iterate_upper_bound = &endSlice;
-				auto cursor = std::unique_ptr<rocksdb::Iterator>(db->NewIterator(readOptions, defaultFdbCF));
-				cursor->Seek(toSlice(keyRange.begin));
-				while (cursor->Valid() && toStringRef(cursor->key()) < keyRange.end && maxDeletes > 0) {
-					writeBatch->Delete(defaultFdbCF, cursor->key());
-					++counters.convertedDeleteKeyReqs;
-					--maxDeletes;
-					cursor->Next();
-				}
-				if (!cursor->status().ok() || maxDeletes <= 0) {
-					// if readrange iteration fails, then do a deleteRange.
-					writeBatch->DeleteRange(defaultFdbCF, toSlice(keyRange.begin), toSlice(keyRange.end));
-				} else {
-					auto it = keysSet.lower_bound(keyRange.begin);
-					while (it != keysSet.end() && *it < keyRange.end) {
-						writeBatch->Delete(defaultFdbCF, toSlice(*it));
-						++counters.convertedDeleteKeyReqs;
-						--maxDeletes;
-						it++;
-					}
-					it = previousCommitKeysSet.lower_bound(keyRange.begin);
-					while (it != previousCommitKeysSet.end() && *it < keyRange.end) {
-						writeBatch->Delete(defaultFdbCF, toSlice(*it));
-						++counters.convertedDeleteKeyReqs;
-						--maxDeletes;
-						it++;
-					}
-				}
-			} else {
-				writeBatch->DeleteRange(defaultFdbCF, toSlice(keyRange.begin), toSlice(keyRange.end));
-			}
-		}
 	}
 
 	// Checks and waits for few seconds if rocskdb is overloaded.
@@ -2148,7 +2086,7 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 		return Void();
 	}
 
-	Future<Void> canCommit() override { return checkRocksdbState(this); }
+	Future<Void> canCommit() override { return Void(); }
 
 	ACTOR Future<Void> commitInRocksDB(RocksDBKeyValueStore* self) {
 		// If there is nothing to write, don't write.
@@ -2166,7 +2104,7 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 		return Void();
 	}
 
-	Future<Void> commit(bool) override { return commitInRocksDB(this); }
+	Future<Void> commit(bool) override { return Void(); }
 
 	void checkWaiters(const FlowLock& semaphore, int maxWaiters) {
 		if (semaphore.waiters() > maxWaiters) {
@@ -2181,22 +2119,16 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 		return type != ReadType::EAGER && !(key.startsWith(systemKeys.begin));
 	}
 
+	static Future<Optional<Value>> noop() {
+		Optional<Value> value;
+		return value;
+	}
+
 	ACTOR template <class Action>
 	static Future<Optional<Value>> read(Action* action, FlowLock* semaphore, IThreadPool* pool, Counter* counter) {
-		state std::unique_ptr<Action> a(action);
-		state Optional<Void> slot = wait(timeout(semaphore->take(), SERVER_KNOBS->ROCKSDB_READ_QUEUE_WAIT));
-		if (!slot.present()) {
-			++(*counter);
-			throw server_overloaded();
-		}
-
-		state FlowLock::Releaser release(*semaphore);
-
-		auto fut = a->result.getFuture();
-		pool->post(a.release());
-		Optional<Value> result = wait(fut);
-
-		return result;
+		wait(delay(0.0)); // actors must call wait apparently
+		Optional<Value> value;
+		return value;
 	}
 
 	Future<Optional<Value>> readValue(KeyRef key, Optional<ReadOptions> options) override {
@@ -2224,27 +2156,8 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	}
 
 	Future<Optional<Value>> readValuePrefix(KeyRef key, int maxLength, Optional<ReadOptions> options) override {
-		ReadType type = ReadType::NORMAL;
-		Optional<UID> debugID;
-
-		if (options.present()) {
-			type = options.get().type;
-			debugID = options.get().debugID;
-		}
-
-		if (!shouldThrottle(type, key)) {
-			auto a = new Reader::ReadValuePrefixAction(key, maxLength, type, debugID);
-			auto res = a->result.getFuture();
-			readThreads->post(a);
-			return res;
-		}
-
-		auto& semaphore = (type == ReadType::FETCH) ? fetchSemaphore : readSemaphore;
-		int maxWaiters = (type == ReadType::FETCH) ? numFetchWaiters : numReadWaiters;
-
-		checkWaiters(semaphore, maxWaiters);
-		auto a = std::make_unique<Reader::ReadValuePrefixAction>(key, maxLength, type, debugID);
-		return read(a.release(), &semaphore, readThreads.getPtr(), &counters.failedToAcquire);
+		Optional<Value> value;
+		return value;
 	}
 
 	ACTOR static Future<Standalone<RangeResultRef>> read(Reader::ReadRangeAction* action,
@@ -2271,25 +2184,8 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	                              int rowLimit,
 	                              int byteLimit,
 	                              Optional<ReadOptions> options) override {
-		ReadType type = ReadType::NORMAL;
-
-		if (options.present()) {
-			type = options.get().type;
-		}
-
-		if (!shouldThrottle(type, keys.begin)) {
-			auto a = new Reader::ReadRangeAction(keys, rowLimit, byteLimit, type, counters);
-			auto res = a->result.getFuture();
-			readThreads->post(a);
-			return res;
-		}
-
-		auto& semaphore = (type == ReadType::FETCH) ? fetchSemaphore : readSemaphore;
-		int maxWaiters = (type == ReadType::FETCH) ? numFetchWaiters : numReadWaiters;
-
-		checkWaiters(semaphore, maxWaiters);
-		auto a = std::make_unique<Reader::ReadRangeAction>(keys, rowLimit, byteLimit, type, counters);
-		return read(a.release(), &semaphore, readThreads.getPtr(), &counters.failedToAcquire);
+		RangeResult result;
+		return result;
 	}
 
 	StorageBytes getStorageBytes() const override {
@@ -2304,42 +2200,16 @@ struct RocksDBKeyValueStore : IKeyValueStore {
 	}
 
 	Future<CheckpointMetaData> checkpoint(const CheckpointRequest& request) override {
-		auto a = new Writer::CheckpointAction(request);
-
-		auto res = a->reply.getFuture();
-		writeThread->post(a);
-		return res;
+		CheckpointMetaData cmd;
+		return cmd;
 	}
 
 	Future<Void> restore(const std::vector<CheckpointMetaData>& checkpoints) override {
-		auto a = new Writer::RestoreAction(path, checkpoints);
-		auto res = a->done.getFuture();
-		writeThread->post(a);
-		return res;
+		return Void();
 	}
 
 	// Delete a checkpoint.
 	Future<Void> deleteCheckpoint(const CheckpointMetaData& checkpoint) override {
-		if (checkpoint.format == DataMoveRocksCF) {
-			RocksDBColumnFamilyCheckpoint rocksCF;
-			ObjectReader reader(checkpoint.serializedCheckpoint.begin(), IncludeVersion());
-			reader.deserialize(rocksCF);
-
-			std::unordered_set<std::string> dirs;
-			for (const LiveFileMetaData& file : rocksCF.sstFiles) {
-				dirs.insert(file.db_path);
-			}
-			for (const std::string dir : dirs) {
-				platform::eraseDirectoryRecursive(dir);
-				TraceEvent("DeleteCheckpointRemovedDir", id)
-				    .detail("CheckpointID", checkpoint.checkpointID)
-				    .detail("Dir", dir);
-			}
-		} else if (checkpoint.format == RocksDB) {
-			throw not_implemented();
-		} else {
-			throw internal_error();
-		}
 		return Void();
 	}
 
