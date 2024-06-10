@@ -489,19 +489,6 @@ function(package_bindingtester2)
             ${local_cluster_directory}
             ${build_directory}
   )
-
-  prepare_binding_test_files(${build_directory} copy_bindingtester2_test_files ${touch_file})
-
-  set(tar_file ${CMAKE_BINARY_DIR}/packages/bindingtester2-${FDB_VERSION}.tar.gz)
-  add_custom_command(
-    OUTPUT ${tar_file}
-    DEPENDS ${touch_file} ${output_files} ${local_cluster_files} copy_bindingtester2_test_files
-    COMMAND ${CMAKE_COMMAND} -E tar czf ${tar_file} *
-    WORKING_DIRECTORY ${build_directory}
-    COMMENT "Pack bindingtester2"
-  )
-
-  add_custom_target(bindingtester2 ALL DEPENDS ${tar_file})
 endfunction(package_bindingtester2)
 
 function(package_bindingtester)
@@ -535,20 +522,6 @@ function(package_bindingtester)
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/bindings ${CMAKE_BINARY_DIR}/bindingtester/tests
     COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_BINARY_DIR}/bindingtester.touch"
     COMMENT "Copy test files for bindingtester")
-
-  prepare_binding_test_files(${bdir} copy_binding_output_files ${CMAKE_BINARY_DIR}/bindingtester.touch)
-
-  add_custom_target(copy_bindingtester_binaries
-    DEPENDS ${outfiles} "${CMAKE_BINARY_DIR}/bindingtester.touch" copy_binding_output_files)
-  add_dependencies(copy_bindingtester_binaries strip_only_fdbserver strip_only_fdbcli strip_only_fdb_c)
-
-  set(tar_file ${CMAKE_BINARY_DIR}/packages/bindingtester-${FDB_VERSION}.tar.gz)
-  add_custom_command(
-    OUTPUT ${tar_file}
-    COMMAND ${CMAKE_COMMAND} -E tar czf ${tar_file} *
-    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/bindingtester
-    COMMENT "Pack bindingtester")
-  add_custom_target(bindingtester ALL DEPENDS ${tar_file} copy_bindingtester_binaries)
 endfunction()
 
 # Test for setting up Python venv for client tests.
