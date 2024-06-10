@@ -43,9 +43,6 @@ endforeach()
 add_custom_target(python_binding ALL DEPENDS ${out_files})
 
 file(MAKE_DIRECTORY ${PROJECT_BINARY_DIR}/bindings/python/fdb)
-set(options_file ${PROJECT_BINARY_DIR}/bindings/python/fdb/fdboptions.py)
-vexillographer_compile(TARGET fdb_python_options LANG python OUT ${options_file}
-  OUTPUT ${options_file})
 
 if(NOT DEFINED FDB_API_VERSION_FILE)
   message(FATAL_ERROR "Missing definitions of API versions")
