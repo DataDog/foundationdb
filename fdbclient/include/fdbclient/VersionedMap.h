@@ -22,6 +22,7 @@
 #define FDBCLIENT_VERSIONEDMAP_H
 #pragma once
 
+#include <iostream>
 #include "flow/flow.h"
 #include "flow/IndexedSet.h"
 #include "fdbclient/FDBTypes.h"
@@ -688,6 +689,10 @@ public:
 	}
 
 	// For each item in the versioned map, 4 PTree nodes are potentially allocated:
+	inline void __attribute__((constructor)) printValue() {
+
+		std::cout << "size of PTreeT: " << sizeof(PTreeT) << std::endl;
+	}
 	static const int overheadPerItem = nextFastAllocatedSize(sizeof(PTreeT)) * 4;
 	struct iterator;
 

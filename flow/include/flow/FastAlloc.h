@@ -224,7 +224,6 @@ force_inline void freeOrMaybeKeepalive(void* ptr) {
 }
 
 inline constexpr int nextFastAllocatedSize(int x) {
-	std::cout << "x: " << x << std::endl;
 	assert(x > 0 && x <= 32768);
 	if (x <= 16)
 		return 16;
