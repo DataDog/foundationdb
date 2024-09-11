@@ -47,7 +47,6 @@ bool valgrindPrecise();
 #include <vector>
 #include <cstdlib>
 #include <cstdio>
-#include <iostream>
 #include <unordered_map>
 
 #if defined(ALLOC_INSTRUMENTATION) && defined(__linux__)

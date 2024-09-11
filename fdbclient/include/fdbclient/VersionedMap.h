@@ -3,7 +3,7 @@
  *
  * This source file is part of the FoundationDB open source project
  *
- * Copyright 2013-2022 Apple Inc. and the FoundationDB project authors
+ * Copyright 2013-2024 Apple Inc. and the FoundationDB project authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@
 #define FDBCLIENT_VERSIONEDMAP_H
 #pragma once
 
-#include <iostream>
 #include "flow/flow.h"
 #include "flow/IndexedSet.h"
 #include "fdbclient/FDBTypes.h"
@@ -689,10 +688,6 @@ public:
 	}
 
 	// For each item in the versioned map, 4 PTree nodes are potentially allocated:
-	inline void __attribute__((constructor)) printValue() {
-
-		std::cout << "size of PTreeT: " << sizeof(PTreeT) << std::endl;
-	}
 	static const int overheadPerItem = nextFastAllocatedSize(sizeof(PTreeT)) * 4;
 	struct iterator;
 
