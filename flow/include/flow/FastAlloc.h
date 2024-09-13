@@ -223,7 +223,7 @@ force_inline void freeOrMaybeKeepalive(void* ptr) {
 }
 
 inline constexpr int nextFastAllocatedSize(int x) {
-	assert(x > 0 && x <= 16384);
+	assert(x > 0 && x <= 32768);
 	if (x <= 16)
 		return 16;
 	else if (x <= 32)
@@ -246,8 +246,10 @@ inline constexpr int nextFastAllocatedSize(int x) {
 		return 4096;
 	else if (x <= 8192)
 		return 8192;
-	else
+	else if (x <= 16384)
 		return 16384;
+	else
+		return 32768;
 }
 
 template <class Object>
@@ -324,6 +326,8 @@ inline void freeFast(int size, void* ptr) {
 		return FastAllocator<8192>::allocate();
 	if (size <= 16384)
 		return FastAllocator<16384>::allocate();
+	if (size <= 32768)
+		return FastAllocator<32768>::allocate();
 #endif
 	auto* result = aligned_alloc(4096, size);
 	if (result == nullptr) {
@@ -342,6 +346,8 @@ inline void freeFast4kAligned(int size, void* ptr) {
 		return FastAllocator<8192>::release(ptr);
 	if (size <= 16384)
 		return FastAllocator<16384>::release(ptr);
+	if (size <= 32768)
+		return FastAllocator<32768>::release(ptr);
 #endif
 	aligned_free(ptr);
 }
