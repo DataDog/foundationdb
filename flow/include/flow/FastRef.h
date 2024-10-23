@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <gperftools/malloc_extension.h>
 #include "flow/Traceable.h"
 
 // The thread safety this class provides is that it's safe to call addref and
@@ -48,7 +49,9 @@ public:
 	}
 	void delref() const {
 		if (delref_no_destroy())
-			delete (Subclass*)this;
+			if (MallocExtension::instance()->GetOwnership(this) == MallocExtension::kOwned) {
+				delete (Subclass*)this;
+			}
 	}
 	void setrefCountUnsafe(int32_t count) const { referenceCount.store(count); }
 	int32_t debugGetReferenceCount() const { return referenceCount.load(); }
