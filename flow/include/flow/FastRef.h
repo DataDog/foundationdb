@@ -50,7 +50,7 @@ public:
 	void delref() const {
 		if (delref_no_destroy())
 			if (MallocExtension::instance()->GetOwnership(this) == MallocExtension::kOwned) {
-				delete (Subclass*)this;
+				delete this;
 			}
 	}
 	void setrefCountUnsafe(int32_t count) const { referenceCount.store(count); }
