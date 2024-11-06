@@ -48,10 +48,7 @@ public:
 		return referenceCount.fetch_sub(1) == 1;
 	}
 	void delref() const {
-		if (delref_no_destroy())
-			if (MallocExtension::instance()->GetOwnership(this) == MallocExtension::kOwned) {
-				delete this;
-			}
+		// noop	because nothing was created
 	}
 	void setrefCountUnsafe(int32_t count) const { referenceCount.store(count); }
 	int32_t debugGetReferenceCount() const { return referenceCount.load(); }
