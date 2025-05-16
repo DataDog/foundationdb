@@ -49,7 +49,7 @@ func ExampleOpenDefault() {
 	_ = db
 }
 
-func ExampleVersionstamp(t *testing.T) {
+func TestExampleVersionstamp(t *testing.T) {
 	fdb.MustAPIVersion(400)
 	db := fdb.MustOpenDefault()
 
