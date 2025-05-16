@@ -96,5 +96,5 @@ func (s Snapshot) GetDatabase() Database {
 // Snapshot returns the receiver and allows Snapshot to satisfy the
 // ReadTransaction interface.
 func (s Snapshot) Options() TransactionOptions {
-	return s.Options()
+	return TransactionOptions{s.transaction}
 }
