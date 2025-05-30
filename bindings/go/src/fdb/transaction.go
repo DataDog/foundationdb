@@ -88,10 +88,6 @@ func (t *transaction) destroy() {
 	C.fdb_transaction_destroy(t.ptr)
 }
 
-func (t *transaction) cancel() {
-	C.fdb_transaction_cancel(t.ptr)
-}
-
 // GetDatabase returns a handle to the database with which this transaction is
 // interacting.
 func (t Transaction) GetDatabase() Database {
