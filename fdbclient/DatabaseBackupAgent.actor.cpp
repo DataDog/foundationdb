@@ -934,11 +934,11 @@ struct CopyLogRangeTaskFunc : TaskFuncBase {
 		state Version endVersion =
 		    BinaryReader::fromStringRef<Version>(task->params[DatabaseBackupAgent::keyEndVersion], Unversioned());
 
-		Version newEndVersion = std::min(endVersion,
-		                                 (((beginVersion - 1) / CLIENT_KNOBS->COPY_LOG_BLOCK_SIZE) + 1 +
-		                                  CLIENT_KNOBS->COPY_LOG_BLOCKS_PER_TASK +
-		                                  (g_network->isSimulated() ? CLIENT_KNOBS->BACKUP_SIM_COPY_LOG_RANGES : 0)) *
-		                                     CLIENT_KNOBS->COPY_LOG_BLOCK_SIZE);
+		state Version newEndVersion = std::min(endVersion,
+		                                       (((beginVersion - 1) / CLIENT_KNOBS->COPY_LOG_BLOCK_SIZE) + 1 +
+		                                        CLIENT_KNOBS->COPY_LOG_BLOCKS_PER_TASK +
+		                                        (g_network->isSimulated() ? CLIENT_KNOBS->BACKUP_SIM_COPY_LOG_RANGES : 0)) *
+		                                           CLIENT_KNOBS->COPY_LOG_BLOCK_SIZE);
 
 		state Standalone<VectorRef<KeyRangeRef>> ranges = getLogRanges(
 		    beginVersion, newEndVersion, task->params[BackupAgentBase::destUid], CLIENT_KNOBS->COPY_LOG_BLOCK_SIZE);
@@ -972,18 +972,18 @@ struct CopyLogRangeTaskFunc : TaskFuncBase {
 				                           LockAware::True));
 			}
 
-				// copy the range
-				Optional<Version> nextVersionBr =
-				    wait(dumpData(cx,
-				                  task,
-				                  results[rangeN],
-				                  locks[rangeN].getPtr(),
-				                  taskBucket,
-				                  breakTime,
-				                  rangeN,
-				                  nRanges,
-				                  beginVersion,
-				                  newEndVersion));
+			// copy the range
+			Optional<Version> nextVersionBr =
+			    wait(dumpData(cx,
+			                  task,
+			                  results[rangeN],
+			                  locks[rangeN].getPtr(),
+			                  taskBucket,
+			                  breakTime,
+			                  rangeN,
+			                  nRanges,
+			                  beginVersion,
+			                  newEndVersion));
 
 			// exit from the task if a timeout occurs
 			if (nextVersionBr.present()) {
