@@ -730,131 +730,196 @@ struct CopyLogRangeTaskFunc : TaskFuncBase {
 
 	// store mutation data from results until the end of stream or the timeout. If breaks on timeout returns the first
 	// uncopied version
-	ACTOR static Future<Optional<Version>> dumpData(Database cx,
-	                                                Reference<Task> task,
-	                                                PromiseStream<RCGroup> results,
-	                                                FlowLock* lock,
-	                                                Reference<TaskBucket> tb,
-	                                                double breakTime) {
-		state bool endOfStream = false;
-		state Subspace conf = Subspace(databaseBackupPrefixRange.begin)
-		                          .get(BackupAgentBase::keyConfig)
-		                          .get(task->params[BackupAgentBase::keyConfigLogUid]);
-		state std::vector<RangeResult> nextMutations;
-		state bool isTimeoutOccured = false;
-		state Optional<KeyRef> lastKey;
-		state Version lastVersion;
-		state int64_t nextMutationSize = 0;
-		loop {
-			try {
-				if (endOfStream && !nextMutationSize) {
-					return Optional<Version>();
-				}
+		ACTOR static Future<Optional<Version>> dumpData(Database cx,
+		                                                Reference<Task> task,
+		                                                PromiseStream<RCGroup> results,
+		                                                FlowLock* lock,
+		                                                Reference<TaskBucket> tb,
+		                                                double breakTime,
+		                                                int rangeIndex,
+		                                                int rangeCount,
+		                                                Version taskBeginVersion,
+		                                                Version taskEndVersion) {
+			state bool endOfStream = false;
+			state Subspace conf = Subspace(databaseBackupPrefixRange.begin)
+			                          .get(BackupAgentBase::keyConfig)
+			                          .get(task->params[BackupAgentBase::keyConfigLogUid]);
+			state std::vector<RangeResult> nextMutations;
+			state bool isTimeoutOccured = false;
+			state Optional<KeyRef> lastKey;
+			state Version lastVersion;
+			state int64_t nextMutationSize = 0;
+			loop {
+				try {
+					if (endOfStream && !nextMutationSize) {
+						return Optional<Version>();
+					}
 
-				state std::vector<RangeResult> mutations = std::move(nextMutations);
-				state int64_t mutationSize = nextMutationSize;
-				nextMutations = std::vector<RangeResult>();
-				nextMutationSize = 0;
+					state std::vector<RangeResult> mutations = std::move(nextMutations);
+					state int64_t mutationSize = nextMutationSize;
+					nextMutations = std::vector<RangeResult>();
+					nextMutationSize = 0;
+					state int64_t mutationCount = 0;
+					state Optional<Version> batchBeginVersion;
+					state Optional<Version> batchEndVersion;
+					state double readWaitSeconds = 0;
+					state double batchStart = now();
 
-				if (!endOfStream) {
+					for (auto m : mutations) {
+						mutationCount += m.size();
+						for (auto kv : m) {
+							Version version = getLogKeyVersion(kv.key);
+							if (!batchBeginVersion.present()) {
+								batchBeginVersion = version;
+							}
+							batchEndVersion = version;
+						}
+					}
+
+					if (!endOfStream) {
+						loop {
+							try {
+								state double readWaitStart = now();
+								RCGroup group = waitNext(results.getFuture());
+								readWaitSeconds += now() - readWaitStart;
+								lock->release(group.items.expectedSize());
+
+								int vecSize = group.items.expectedSize();
+								if (mutationSize + vecSize >= CLIENT_KNOBS->BACKUP_LOG_WRITE_BATCH_MAX_SIZE) {
+									nextMutations.push_back(group.items);
+									nextMutationSize = vecSize;
+									break;
+								}
+
+								mutations.push_back(group.items);
+								mutationSize += vecSize;
+								mutationCount += group.items.size();
+								for (auto kv : group.items) {
+									Version version = getLogKeyVersion(kv.key);
+									if (!batchBeginVersion.present()) {
+										batchBeginVersion = version;
+									}
+									batchEndVersion = version;
+								}
+							} catch (Error& e) {
+								state Error error = e;
+								if (e.code() == error_code_end_of_stream) {
+									endOfStream = true;
+									break;
+								}
+
+								throw error;
+							}
+						}
+					}
+
+					state Optional<Version> nextVersionAfterBreak;
+					state Transaction tr(cx);
+					state int commitAttempts = 0;
+
 					loop {
 						try {
-							RCGroup group = waitNext(results.getFuture());
-							lock->release(group.items.expectedSize());
+							commitAttempts++;
+							state double writeStart = now();
+							tr.setOption(FDBTransactionOptions::LOCK_AWARE);
+							tr.trState->options.sizeLimit = 2 * CLIENT_KNOBS->TRANSACTION_SIZE_LIMIT;
+							wait(checkDatabaseLock(&tr,
+							                       BinaryReader::fromStringRef<UID>(
+							                           task->params[BackupAgentBase::keyConfigLogUid], Unversioned())));
+							state int64_t bytesSet = 0;
 
-							int vecSize = group.items.expectedSize();
-							if (mutationSize + vecSize >= CLIENT_KNOBS->BACKUP_LOG_WRITE_BATCH_MAX_SIZE) {
+							bool first = true;
+							for (auto m : mutations) {
+								for (auto kv : m) {
+									if (isTimeoutOccured) {
+										Version newVersion = getLogKeyVersion(kv.key);
 
-								nextMutations.push_back(group.items);
-								nextMutationSize = vecSize;
-								break;
-							}
-
-							mutations.push_back(group.items);
-							mutationSize += vecSize;
-						} catch (Error& e) {
-							state Error error = e;
-							if (e.code() == error_code_end_of_stream) {
-								endOfStream = true;
-								break;
-							}
-
-							throw error;
-						}
-					}
-				}
-
-				state Optional<Version> nextVersionAfterBreak;
-				state Transaction tr(cx);
-
-				loop {
-					try {
-						tr.setOption(FDBTransactionOptions::LOCK_AWARE);
-						tr.trState->options.sizeLimit = 2 * CLIENT_KNOBS->TRANSACTION_SIZE_LIMIT;
-						wait(checkDatabaseLock(&tr,
-						                       BinaryReader::fromStringRef<UID>(
-						                           task->params[BackupAgentBase::keyConfigLogUid], Unversioned())));
-						state int64_t bytesSet = 0;
-
-						bool first = true;
-						for (auto m : mutations) {
-							for (auto kv : m) {
-								if (isTimeoutOccured) {
-									Version newVersion = getLogKeyVersion(kv.key);
-
-									if (newVersion > lastVersion) {
-										nextVersionAfterBreak = newVersion;
-										break;
+										if (newVersion > lastVersion) {
+											nextVersionAfterBreak = newVersion;
+											break;
+										}
 									}
+									if (first) {
+										tr.addReadConflictRange(singleKeyRange(kv.key));
+										first = false;
+									}
+									tr.set(kv.key.removePrefix(backupLogKeys.begin)
+									           .removePrefix(task->params[BackupAgentBase::destUid])
+									           .withPrefix(task->params[BackupAgentBase::keyConfigLogUid])
+									           .withPrefix(applyLogKeys.begin),
+									       kv.value);
+									bytesSet += kv.expectedSize() - backupLogKeys.begin.expectedSize() +
+									            applyLogKeys.begin.expectedSize();
+									lastKey = kv.key;
 								}
-								if (first) {
-									tr.addReadConflictRange(singleKeyRange(kv.key));
-									first = false;
-								}
-								tr.set(kv.key.removePrefix(backupLogKeys.begin)
-								           .removePrefix(task->params[BackupAgentBase::destUid])
-								           .withPrefix(task->params[BackupAgentBase::keyConfigLogUid])
-								           .withPrefix(applyLogKeys.begin),
-								       kv.value);
-								bytesSet += kv.expectedSize() - backupLogKeys.begin.expectedSize() +
-								            applyLogKeys.begin.expectedSize();
-								lastKey = kv.key;
 							}
+
+							state double commitStart = now();
+							wait(tr.commit());
+							state double commitSeconds = now() - commitStart;
+							Params.bytesWritten().set(task, Params.bytesWritten().getOrDefault(task) + bytesSet);
+							TraceEvent("DBA_DRDebugCopyLogCommit")
+							    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid])
+							    .detail("RangeIndex", rangeIndex)
+							    .detail("RangeCount", rangeCount)
+							    .detail("TaskBeginVersion", taskBeginVersion)
+							    .detail("TaskEndVersion", taskEndVersion)
+							    .detail("BatchBeginVersion", batchBeginVersion.orDefault(invalidVersion))
+							    .detail("BatchEndVersion", batchEndVersion.orDefault(invalidVersion))
+							    .detail("MutationRanges", mutations.size())
+							    .detail("MutationCount", mutationCount)
+							    .detail("MutationBytes", mutationSize)
+							    .detail("BytesSet", bytesSet)
+							    .detail("ReadWaitSeconds", readWaitSeconds)
+							    .detail("BuildSeconds", commitStart - writeStart)
+							    .detail("CommitSeconds", commitSeconds)
+							    .detail("TotalSeconds", now() - batchStart)
+							    .detail("CommitAttempts", commitAttempts)
+							    .detail("TimeoutBreakActive", isTimeoutOccured);
+							break;
+						} catch (Error& e) {
+							TraceEvent(SevWarnAlways, "DBA_DRDebugCopyLogCommitRetry")
+							    .error(e)
+							    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid])
+							    .detail("RangeIndex", rangeIndex)
+							    .detail("RangeCount", rangeCount)
+							    .detail("TaskBeginVersion", taskBeginVersion)
+							    .detail("TaskEndVersion", taskEndVersion)
+							    .detail("BatchBeginVersion", batchBeginVersion.orDefault(invalidVersion))
+							    .detail("BatchEndVersion", batchEndVersion.orDefault(invalidVersion))
+							    .detail("MutationRanges", mutations.size())
+							    .detail("MutationCount", mutationCount)
+							    .detail("MutationBytes", mutationSize)
+							    .detail("CommitAttempts", commitAttempts);
+							wait(tr.onError(e));
 						}
-
-						wait(tr.commit());
-						Params.bytesWritten().set(task, Params.bytesWritten().getOrDefault(task) + bytesSet);
-						break;
-					} catch (Error& e) {
-						wait(tr.onError(e));
 					}
-				}
-				if (nextVersionAfterBreak.present()) {
-					return nextVersionAfterBreak;
-				}
-				if (!isTimeoutOccured && timer_monotonic() >= breakTime && lastKey.present()) {
-					// timeout occured
-					// continue to copy mutations with the
-					// same version before break because
-					// the next run should start from the beginning of a version > lastVersion.
-					lastVersion = getLogKeyVersion(lastKey.get());
-					isTimeoutOccured = true;
-				}
-			} catch (Error& e) {
-				if (e.code() == error_code_actor_cancelled || e.code() == error_code_backup_error)
-					throw e;
+					if (nextVersionAfterBreak.present()) {
+						return nextVersionAfterBreak;
+					}
+					if (!isTimeoutOccured && timer_monotonic() >= breakTime && lastKey.present()) {
+						// timeout occured
+						// continue to copy mutations with the
+						// same version before break because
+						// the next run should start from the beginning of a version > lastVersion.
+						lastVersion = getLogKeyVersion(lastKey.get());
+						isTimeoutOccured = true;
+					}
+				} catch (Error& e) {
+					if (e.code() == error_code_actor_cancelled || e.code() == error_code_backup_error)
+						throw e;
 
-				state Error err = e;
-				wait(logError(cx,
-				              Subspace(databaseBackupPrefixRange.begin)
-				                  .get(BackupAgentBase::keyErrors)
-				                  .pack(task->params[BackupAgentBase::keyConfigLogUid]),
-				              format("ERROR: Failed to dump mutations because of error %s", err.what())));
+					state Error err = e;
+					wait(logError(cx,
+					              Subspace(databaseBackupPrefixRange.begin)
+					                  .get(BackupAgentBase::keyErrors)
+					                  .pack(task->params[BackupAgentBase::keyConfigLogUid]),
+					              format("ERROR: Failed to dump mutations because of error %s", err.what())));
 
-				throw err;
+					throw err;
+				}
 			}
 		}
-	}
 
 	ACTOR static Future<Void> _execute(Database cx,
 	                                   Reference<TaskBucket> taskBucket,
@@ -907,9 +972,18 @@ struct CopyLogRangeTaskFunc : TaskFuncBase {
 				                           LockAware::True));
 			}
 
-			// copy the range
-			Optional<Version> nextVersionBr =
-			    wait(dumpData(cx, task, results[rangeN], locks[rangeN].getPtr(), taskBucket, breakTime));
+				// copy the range
+				Optional<Version> nextVersionBr =
+				    wait(dumpData(cx,
+				                  task,
+				                  results[rangeN],
+				                  locks[rangeN].getPtr(),
+				                  taskBucket,
+				                  breakTime,
+				                  rangeN,
+				                  nRanges,
+				                  beginVersion,
+				                  newEndVersion));
 
 			// exit from the task if a timeout occurs
 			if (nextVersionBr.present()) {
@@ -1047,57 +1121,77 @@ struct CopyLogsTaskFunc : TaskFuncBase {
 		tr->set(task->params[BackupAgentBase::keyConfigLogUid].withPrefix(applyMutationsEndRange.begin),
 		        BinaryWriter::toValue(applyVersion, Unversioned()));
 
-		Optional<Value> stopValue = wait(fStopValue);
-		state Version stopVersionData =
-		    stopValue.present() ? BinaryReader::fromStringRef<Version>(stopValue.get(), Unversioned()) : -1;
+			Optional<Value> stopValue = wait(fStopValue);
+			state Version stopVersionData =
+			    stopValue.present() ? BinaryReader::fromStringRef<Version>(stopValue.get(), Unversioned()) : -1;
+			state bool canCopy = (stopVersionData == -1) || (stopVersionData >= applyVersion);
 
-		if (endVersion - beginVersion > deterministicRandom()->randomInt64(0, CLIENT_KNOBS->BACKUP_VERSION_DELAY)) {
-			TraceEvent("DBA_CopyLogs")
+			TraceEvent("DBA_DRDebugCopyLogsWindow")
 			    .detail("BeginVersion", beginVersion)
+			    .detail("PrevBeginVersion", prevBeginVersion)
+			    .detail("AppliedVersion", appliedVersion)
 			    .detail("ApplyVersion", applyVersion)
 			    .detail("EndVersion", endVersion)
+			    .detail("SourceLagVersions", endVersion - beginVersion)
+			    .detail("ApplyLagVersions", endVersion - appliedVersion)
 			    .detail("StopVersionData", stopVersionData)
+			    .detail("CanCopy", canCopy)
 			    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
-		}
 
-		if ((stopVersionData == -1) || (stopVersionData >= applyVersion)) {
-			state Reference<TaskFuture> allPartsDone = futureBucket->future(tr);
-			std::vector<Future<Key>> addTaskVector;
-			addTaskVector.push_back(CopyLogsTaskFunc::addTask(
-			    tr, taskBucket, task, beginVersion, endVersion, TaskCompletionKey::signal(onDone), allPartsDone));
-			int blockSize = std::max<int>(
-			    1, ((endVersion - beginVersion) / CLIENT_KNOBS->BACKUP_COPY_TASKS) / CLIENT_KNOBS->BACKUP_BLOCK_SIZE);
-			for (int64_t vblock = beginVersion / CLIENT_KNOBS->BACKUP_BLOCK_SIZE;
-			     vblock < (endVersion + CLIENT_KNOBS->BACKUP_BLOCK_SIZE - 1) / CLIENT_KNOBS->BACKUP_BLOCK_SIZE;
-			     vblock += blockSize) {
-				addTaskVector.push_back(CopyLogRangeTaskFunc::addTask(
-				    tr,
-				    taskBucket,
-				    task,
-				    std::max(beginVersion, vblock * CLIENT_KNOBS->BACKUP_BLOCK_SIZE),
-				    std::min(endVersion, (vblock + blockSize) * CLIENT_KNOBS->BACKUP_BLOCK_SIZE),
-				    TaskCompletionKey::joinWith(allPartsDone)));
+			if (endVersion - beginVersion > deterministicRandom()->randomInt64(0, CLIENT_KNOBS->BACKUP_VERSION_DELAY)) {
+				TraceEvent("DBA_CopyLogs")
+				    .detail("BeginVersion", beginVersion)
+				    .detail("ApplyVersion", applyVersion)
+				    .detail("EndVersion", endVersion)
+				    .detail("StopVersionData", stopVersionData)
+				    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
 			}
 
-			// Do not erase at the first time
-			if (prevBeginVersion > 0) {
-				addTaskVector.push_back(EraseLogRangeTaskFunc::addTask(
-				    tr, taskBucket, task, beginVersion, TaskCompletionKey::joinWith(allPartsDone)));
-			}
+			if (canCopy) {
+				state Reference<TaskFuture> allPartsDone = futureBucket->future(tr);
+				std::vector<Future<Key>> addTaskVector;
+				addTaskVector.push_back(CopyLogsTaskFunc::addTask(
+				    tr, taskBucket, task, beginVersion, endVersion, TaskCompletionKey::signal(onDone), allPartsDone));
+				int blockSize = std::max<int>(
+				    1, ((endVersion - beginVersion) / CLIENT_KNOBS->BACKUP_COPY_TASKS) / CLIENT_KNOBS->BACKUP_BLOCK_SIZE);
+				for (int64_t vblock = beginVersion / CLIENT_KNOBS->BACKUP_BLOCK_SIZE;
+				     vblock < (endVersion + CLIENT_KNOBS->BACKUP_BLOCK_SIZE - 1) / CLIENT_KNOBS->BACKUP_BLOCK_SIZE;
+				     vblock += blockSize) {
+					addTaskVector.push_back(CopyLogRangeTaskFunc::addTask(
+					    tr,
+					    taskBucket,
+					    task,
+					    std::max(beginVersion, vblock * CLIENT_KNOBS->BACKUP_BLOCK_SIZE),
+					    std::min(endVersion, (vblock + blockSize) * CLIENT_KNOBS->BACKUP_BLOCK_SIZE),
+					    TaskCompletionKey::joinWith(allPartsDone)));
+				}
 
-			wait(waitForAll(addTaskVector) && taskBucket->finish(tr, task));
-		} else {
-			if (appliedVersion < applyVersion) {
-				wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
-				wait(success(CopyLogsTaskFunc::addTask(
-				    tr, taskBucket, task, prevBeginVersion, beginVersion, TaskCompletionKey::signal(onDone))));
-				wait(taskBucket->finish(tr, task));
-				return Void();
-			}
+				// Do not erase at the first time
+				if (prevBeginVersion > 0) {
+					addTaskVector.push_back(EraseLogRangeTaskFunc::addTask(
+					    tr, taskBucket, task, beginVersion, TaskCompletionKey::joinWith(allPartsDone)));
+				}
+				TraceEvent("DBA_DRDebugCopyLogsTasks")
+				    .detail("BeginVersion", beginVersion)
+				    .detail("ApplyVersion", applyVersion)
+				    .detail("EndVersion", endVersion)
+				    .detail("BlockSize", blockSize)
+				    .detail("TaskCount", addTaskVector.size())
+				    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
 
-			wait(onDone->set(tr, taskBucket) && taskBucket->finish(tr, task));
-			tr->set(states.pack(DatabaseBackupAgent::keyStateStop), BinaryWriter::toValue(beginVersion, Unversioned()));
-		}
+				wait(waitForAll(addTaskVector) && taskBucket->finish(tr, task));
+			} else {
+				if (appliedVersion < applyVersion) {
+					wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
+					wait(success(CopyLogsTaskFunc::addTask(
+					    tr, taskBucket, task, prevBeginVersion, beginVersion, TaskCompletionKey::signal(onDone))));
+					wait(taskBucket->finish(tr, task));
+					return Void();
+				}
+
+				wait(onDone->set(tr, taskBucket) && taskBucket->finish(tr, task));
+				tr->set(states.pack(DatabaseBackupAgent::keyStateStop), BinaryWriter::toValue(beginVersion, Unversioned()));
+			}
 
 		return Void();
 	}
@@ -1326,16 +1420,24 @@ struct CopyDiffLogsTaskFunc : TaskFuncBase {
 			return Void();
 		}
 
-		tr->set(task->params[BackupAgentBase::keyConfigLogUid].withPrefix(applyMutationsEndRange.begin),
-		        BinaryWriter::toValue(beginVersion, Unversioned()));
-		Optional<Value> stopWhenDone = wait(fStopWhenDone);
+			tr->set(task->params[BackupAgentBase::keyConfigLogUid].withPrefix(applyMutationsEndRange.begin),
+			        BinaryWriter::toValue(beginVersion, Unversioned()));
+			Optional<Value> stopWhenDone = wait(fStopWhenDone);
 
-		if (endVersion - beginVersion > deterministicRandom()->randomInt64(0, CLIENT_KNOBS->BACKUP_VERSION_DELAY)) {
-			TraceEvent("DBA_CopyDiffLogs")
+			TraceEvent("DBA_DRDebugCopyDiffLogsWindow")
 			    .detail("BeginVersion", beginVersion)
+			    .detail("PrevBeginVersion", prevBeginVersion)
 			    .detail("EndVersion", endVersion)
+			    .detail("SourceLagVersions", endVersion - beginVersion)
+			    .detail("StopWhenDone", stopWhenDone.present())
 			    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
-		}
+
+			if (endVersion - beginVersion > deterministicRandom()->randomInt64(0, CLIENT_KNOBS->BACKUP_VERSION_DELAY)) {
+				TraceEvent("DBA_CopyDiffLogs")
+				    .detail("BeginVersion", beginVersion)
+				    .detail("EndVersion", endVersion)
+				    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
+			}
 
 		// set the log version to the state
 		tr->set(StringRef(states.pack(DatabaseBackupAgent::keyStateLogBeginVersion)),
@@ -1360,15 +1462,21 @@ struct CopyDiffLogsTaskFunc : TaskFuncBase {
 				    TaskCompletionKey::joinWith(allPartsDone)));
 			}
 
-			if (prevBeginVersion > 0) {
-				addTaskVector.push_back(EraseLogRangeTaskFunc::addTask(
-				    tr, taskBucket, task, beginVersion, TaskCompletionKey::joinWith(allPartsDone)));
-			}
+				if (prevBeginVersion > 0) {
+					addTaskVector.push_back(EraseLogRangeTaskFunc::addTask(
+					    tr, taskBucket, task, beginVersion, TaskCompletionKey::joinWith(allPartsDone)));
+				}
+				TraceEvent("DBA_DRDebugCopyDiffLogsTasks")
+				    .detail("BeginVersion", beginVersion)
+				    .detail("EndVersion", endVersion)
+				    .detail("BlockSize", blockSize)
+				    .detail("TaskCount", addTaskVector.size())
+				    .detail("LogUID", task->params[BackupAgentBase::keyConfigLogUid]);
 
-			wait(waitForAll(addTaskVector) && taskBucket->finish(tr, task));
-		} else {
-			wait(onDone->set(tr, taskBucket) && taskBucket->finish(tr, task));
-		}
+				wait(waitForAll(addTaskVector) && taskBucket->finish(tr, task));
+			} else {
+				wait(onDone->set(tr, taskBucket) && taskBucket->finish(tr, task));
+			}
 		return Void();
 	}
 

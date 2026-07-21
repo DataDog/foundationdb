@@ -706,6 +706,61 @@ Future<Void> readCommitted(Database cx,
 	    cx, results, Void(), lock, range, groupBy, Terminator::True, AccessSystemKeys::True, LockAware::True);
 }
 
+ACTOR Future<Void> traceApplyMutationCommit(Future<CommitID> commitReply,
+                                            FlowLock* commitLock,
+                                            int mutationSize,
+                                            Key uid,
+                                            Version newBeginVersion,
+                                            Version readSnapshot,
+                                            int mutationCount,
+                                            int commitRequestBytes,
+                                            int64_t totalBytesQueued,
+                                            double lockWaitSeconds,
+                                            int64_t lockActivePermitsAtSend,
+                                            int lockWaitersAtSend,
+                                            bool tenantMapChanging,
+                                            bool provisionalProxy) {
+	state double startTime = now();
+	try {
+		state CommitID ci = wait(commitReply);
+		TraceEvent("DBA_DRDebugApplyCommit")
+		    .detail("LogUID", uid)
+		    .detail("BeginVersion", newBeginVersion)
+		    .detail("ReadSnapshot", readSnapshot)
+		    .detail("CommittedVersion", ci.version)
+		    .detail("TxnBatchId", ci.txnBatchId)
+		    .detail("MutationCount", mutationCount)
+		    .detail("MutationBytes", mutationSize)
+		    .detail("CommitRequestBytes", commitRequestBytes)
+		    .detail("TotalBytesQueued", totalBytesQueued)
+		    .detail("LockWaitSeconds", lockWaitSeconds)
+		    .detail("CommitSeconds", now() - startTime)
+		    .detail("LockActivePermitsAtSend", lockActivePermitsAtSend)
+		    .detail("LockWaitersAtSend", lockWaitersAtSend)
+		    .detail("TenantMapChanging", tenantMapChanging)
+		    .detail("ProvisionalProxy", provisionalProxy);
+		commitLock->release(mutationSize);
+		return Void();
+	} catch (Error& e) {
+		TraceEvent(SevWarnAlways, "DBA_DRDebugApplyCommitError")
+		    .error(e)
+		    .detail("LogUID", uid)
+		    .detail("BeginVersion", newBeginVersion)
+		    .detail("ReadSnapshot", readSnapshot)
+		    .detail("MutationCount", mutationCount)
+		    .detail("MutationBytes", mutationSize)
+		    .detail("CommitRequestBytes", commitRequestBytes)
+		    .detail("TotalBytesQueued", totalBytesQueued)
+		    .detail("LockWaitSeconds", lockWaitSeconds)
+		    .detail("CommitSeconds", now() - startTime)
+		    .detail("LockActivePermitsAtSend", lockActivePermitsAtSend)
+		    .detail("LockWaitersAtSend", lockWaitersAtSend)
+		    .detail("TenantMapChanging", tenantMapChanging)
+		    .detail("ProvisionalProxy", provisionalProxy);
+		throw;
+	}
+}
+
 ACTOR Future<Void> sendCommitTransactionRequest(CommitTransactionRequest req,
                                                 Key uid,
                                                 Version newBeginVersion,
@@ -715,7 +770,9 @@ ACTOR Future<Void> sendCommitTransactionRequest(CommitTransactionRequest req,
                                                 int* mutationSize,
                                                 PromiseStream<Future<Void>> addActor,
                                                 FlowLock* commitLock,
-                                                PublicRequestStream<CommitTransactionRequest> commit) {
+                                                PublicRequestStream<CommitTransactionRequest> commit,
+                                                bool tenantMapChanging,
+                                                bool provisionalProxy) {
 	Key applyBegin = uid.withPrefix(applyMutationsBeginRange.begin);
 	Key versionKey = BinaryWriter::toValue(newBeginVersion, Unversioned());
 	Key rangeEnd = getApplyKey(newBeginVersion, uid);
@@ -736,8 +793,28 @@ ACTOR Future<Void> sendCommitTransactionRequest(CommitTransactionRequest req,
 	req.flags = req.flags | CommitTransactionRequest::FLAG_IS_LOCK_AWARE;
 
 	*totalBytes += *mutationSize;
+	state double lockWaitStart = now();
 	wait(commitLock->take(TaskPriority::DefaultYield, *mutationSize));
-	addActor.send(commitLock->releaseWhen(success(commit.getReply(req)), *mutationSize));
+	state double lockWaitSeconds = now() - lockWaitStart;
+	state int64_t lockActivePermitsAtSend = commitLock->activePermits();
+	state int lockWaitersAtSend = commitLock->waiters();
+	state int mutationCount = req.transaction.mutations.size();
+	state int commitRequestBytes = getBytes(req);
+	state Future<CommitID> commitReply = commit.getReply(req);
+	addActor.send(traceApplyMutationCommit(commitReply,
+	                                       commitLock,
+	                                       *mutationSize,
+	                                       uid,
+	                                       newBeginVersion,
+	                                       committedVersion->get(),
+	                                       mutationCount,
+	                                       commitRequestBytes,
+	                                       *totalBytes,
+	                                       lockWaitSeconds,
+	                                       lockActivePermitsAtSend,
+	                                       lockWaitersAtSend,
+	                                       tenantMapChanging,
+	                                       provisionalProxy));
 	return Void();
 }
 
@@ -801,23 +878,25 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				// CommitTransactionRequest. Thus the code below will immediately send any mutations accumulated thus
 				// far if the latest call to decodeBackupLogValue contained a transaction which changed the tenant map
 				// (before processing the mutations which caused the tenant map to change).
-				if (tenantMapChanging && req.transaction.mutations.size()) {
-					// If the tenantMap is changing send the previous CommitTransactionRequest to the CommitProxy
-					TraceEvent("MutationLogRestoreTenantMapChanging").detail("BeginVersion", newBeginVersion);
-					CODE_PROBE(true, "mutation log tenant map changing");
-					wait(sendCommitTransactionRequest(req,
-					                                  uid,
-					                                  newBeginVersion,
-					                                  rangeBegin,
-					                                  committedVersion,
-					                                  &totalBytes,
-					                                  &mutationSize,
-					                                  addActor,
-					                                  commitLock,
-					                                  commit));
-					req = CommitTransactionRequest();
-					mutationSize = 0;
-				}
+					if (tenantMapChanging && req.transaction.mutations.size()) {
+						// If the tenantMap is changing send the previous CommitTransactionRequest to the CommitProxy
+						TraceEvent("MutationLogRestoreTenantMapChanging").detail("BeginVersion", newBeginVersion);
+						CODE_PROBE(true, "mutation log tenant map changing");
+						wait(sendCommitTransactionRequest(req,
+						                                  uid,
+						                                  newBeginVersion,
+						                                  rangeBegin,
+						                                  committedVersion,
+						                                  &totalBytes,
+						                                  &mutationSize,
+						                                  addActor,
+						                                  commitLock,
+						                                  commit,
+						                                  true,
+						                                  provisionalProxy));
+						req = CommitTransactionRequest();
+						mutationSize = 0;
+					}
 
 				state int i;
 				for (i = 0; i < curReq.transaction.mutations.size(); i++) {
@@ -848,16 +927,18 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				throw;
 			}
 		}
-		wait(sendCommitTransactionRequest(req,
-		                                  uid,
-		                                  newBeginVersion,
-		                                  rangeBegin,
-		                                  committedVersion,
-		                                  &totalBytes,
-		                                  &mutationSize,
-		                                  addActor,
-		                                  commitLock,
-		                                  commit));
+			wait(sendCommitTransactionRequest(req,
+			                                  uid,
+			                                  newBeginVersion,
+			                                  rangeBegin,
+			                                  committedVersion,
+			                                  &totalBytes,
+			                                  &mutationSize,
+			                                  addActor,
+			                                  commitLock,
+			                                  commit,
+			                                  tenantMapChanging,
+			                                  provisionalProxy));
 		if (endOfStream) {
 			return totalBytes;
 		}
