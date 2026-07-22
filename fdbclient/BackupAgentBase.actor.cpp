@@ -286,6 +286,66 @@ void _addResult(bool* tenantMapChanging,
 	*mutationSize += logValue.expectedSize();
 }
 
+struct DRDebugApplyStats {
+	int64_t readWaitCount = 0;
+	double readWaitSeconds = 0;
+	int64_t readGroups = 0;
+	int64_t readRows = 0;
+	int64_t readBytes = 0;
+	bool endOfStream = false;
+
+	int64_t decodeCalls = 0;
+	double decodeSeconds = 0;
+	int64_t decodeInputBytes = 0;
+	int64_t decodeLogMutations = 0;
+	int64_t decodeOutputMutations = 0;
+	int64_t decodeEncryptedMutations = 0;
+	int64_t decodeTenantSkippedMutations = 0;
+	int64_t decodeCipherKeyFetches = 0;
+	double decodeConfigFetchSeconds = 0;
+	double decodeCipherKeyFetchSeconds = 0;
+	bool tenantModeRequired = false;
+	bool encryptionEnabled = false;
+	bool clusterAwareEncryption = false;
+	bool configurableEncryption = false;
+
+	int64_t commitRequests = 0;
+	int64_t commitRequestBytes = 0;
+	int64_t commitMutations = 0;
+	int64_t commitMutationBytes = 0;
+	int64_t tenantMapChangingBatches = 0;
+};
+
+void addDRDebugApplyStats(DRDebugApplyStats* total, DRDebugApplyStats const& part) {
+	total->readWaitCount += part.readWaitCount;
+	total->readWaitSeconds += part.readWaitSeconds;
+	total->readGroups += part.readGroups;
+	total->readRows += part.readRows;
+	total->readBytes += part.readBytes;
+	total->endOfStream = total->endOfStream || part.endOfStream;
+
+	total->decodeCalls += part.decodeCalls;
+	total->decodeSeconds += part.decodeSeconds;
+	total->decodeInputBytes += part.decodeInputBytes;
+	total->decodeLogMutations += part.decodeLogMutations;
+	total->decodeOutputMutations += part.decodeOutputMutations;
+	total->decodeEncryptedMutations += part.decodeEncryptedMutations;
+	total->decodeTenantSkippedMutations += part.decodeTenantSkippedMutations;
+	total->decodeCipherKeyFetches += part.decodeCipherKeyFetches;
+	total->decodeConfigFetchSeconds += part.decodeConfigFetchSeconds;
+	total->decodeCipherKeyFetchSeconds += part.decodeCipherKeyFetchSeconds;
+	total->tenantModeRequired = total->tenantModeRequired || part.tenantModeRequired;
+	total->encryptionEnabled = total->encryptionEnabled || part.encryptionEnabled;
+	total->clusterAwareEncryption = total->clusterAwareEncryption || part.clusterAwareEncryption;
+	total->configurableEncryption = total->configurableEncryption || part.configurableEncryption;
+
+	total->commitRequests += part.commitRequests;
+	total->commitRequestBytes += part.commitRequestBytes;
+	total->commitMutations += part.commitMutations;
+	total->commitMutationBytes += part.commitMutationBytes;
+	total->tenantMapChangingBatches += part.tenantMapChangingBatches;
+}
+
 /*
  This actor is responsible for taking an original transaction which was added to the backup mutation log (represented
  by "value" parameter), breaking it up into the individual MutationRefs (that constitute the transaction), decrypting
@@ -304,7 +364,15 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
                                                Reference<KeyRangeMap<Version>> key_version,
                                                Database cx,
                                                std::map<int64_t, TenantName>* tenantMap,
-                                               bool provisionalProxy) {
+                                               bool provisionalProxy,
+                                               DRDebugApplyStats* debugStats) {
+	state double decodeStart = now();
+	state int outputMutationStart = result->size();
+	if (debugStats != nullptr) {
+		debugStats->decodeCalls++;
+		debugStats->decodeInputBytes += value.size();
+	}
+
 	try {
 		state uint64_t offset(0);
 		uint64_t protocolVersion = 0;
@@ -327,7 +395,20 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			throw restore_missing_data();
 
 		state int originalOffset = offset;
+		state double configFetchStart = now();
 		state DatabaseConfiguration config = wait(getDatabaseConfiguration(cx));
+		if (debugStats != nullptr) {
+			debugStats->decodeConfigFetchSeconds += now() - configFetchStart;
+			debugStats->tenantModeRequired =
+			    debugStats->tenantModeRequired || config.tenantMode == TenantMode::REQUIRED;
+			debugStats->encryptionEnabled =
+			    debugStats->encryptionEnabled || config.encryptionAtRestMode.isEncryptionEnabled();
+			debugStats->clusterAwareEncryption =
+			    debugStats->clusterAwareEncryption ||
+			    config.encryptionAtRestMode.mode == EncryptionAtRestMode::CLUSTER_AWARE;
+			debugStats->configurableEncryption =
+			    debugStats->configurableEncryption || CLIENT_KNOBS->ENABLE_CONFIGURABLE_ENCRYPTION;
+		}
 		state KeyRangeRef tenantMapRange = TenantMetadata::tenantMap().subspace;
 
 		while (consumed < totalBytes) {
@@ -352,6 +433,9 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			offset += len2;
 			state Optional<MutationRef> encryptedLogValue = Optional<MutationRef>();
 			ASSERT(!config.encryptionAtRestMode.isEncryptionEnabled() || logValue.isEncrypted());
+			if (debugStats != nullptr) {
+				debugStats->decodeLogMutations++;
+			}
 
 			// Check for valid tenant in required tenant mode. If the tenant does not exist in our tenant map then
 			// we EXCLUDE the mutation (of that respective tenant) during the restore. NOTE: This simply allows a
@@ -361,16 +445,23 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			if (config.tenantMode == TenantMode::REQUIRED &&
 			    config.encryptionAtRestMode.mode != EncryptionAtRestMode::CLUSTER_AWARE &&
 			    !validTenantAccess(tenantMap, logValue, provisionalProxy, version)) {
+				if (debugStats != nullptr) {
+					debugStats->decodeTenantSkippedMutations++;
+				}
 				consumed += BackupAgentBase::logHeaderSize + len1 + len2;
 				continue;
 			}
 
 			// Decrypt mutation ref if encrypted
 			if (logValue.isEncrypted()) {
+				if (debugStats != nullptr) {
+					debugStats->decodeEncryptedMutations++;
+				}
 				encryptedLogValue = logValue;
 				state EncryptCipherDomainId domainId = logValue.encryptDomainId();
 				Reference<AsyncVar<ClientDBInfo> const> dbInfo = cx->clientInfo;
 				try {
+					state double cipherKeyFetchStart = now();
 					if (CLIENT_KNOBS->ENABLE_CONFIGURABLE_ENCRYPTION) {
 						TextAndHeaderCipherKeys cipherKeys =
 						    wait(GetEncryptCipherKeys<ClientDBInfo>::getEncryptCipherKeys(
@@ -381,6 +472,10 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 						    wait(GetEncryptCipherKeys<ClientDBInfo>::getEncryptCipherKeys(
 						        dbInfo, *logValue.encryptionHeader(), BlobCipherMetrics::RESTORE));
 						logValue = logValue.decrypt(cipherKeys, tempArena, BlobCipherMetrics::RESTORE);
+					}
+					if (debugStats != nullptr) {
+						debugStats->decodeCipherKeyFetches++;
+						debugStats->decodeCipherKeyFetchSeconds += now() - cipherKeyFetchStart;
 					}
 				} catch (Error& e) {
 					// It's possible a tenant was deleted and the encrypt key fetch failed
@@ -403,6 +498,9 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			if (config.tenantMode == TenantMode::REQUIRED &&
 			    config.encryptionAtRestMode.mode == EncryptionAtRestMode::CLUSTER_AWARE &&
 			    !validTenantAccess(tenantMap, logValue, provisionalProxy, version)) {
+				if (debugStats != nullptr) {
+					debugStats->decodeTenantSkippedMutations++;
+				}
 				consumed += BackupAgentBase::logHeaderSize + len1 + len2;
 				continue;
 			}
@@ -479,7 +577,14 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			    .detail("OriginalOffset", originalOffset);
 			throw restore_corrupted_data();
 		}
+		if (debugStats != nullptr) {
+			debugStats->decodeOutputMutations += static_cast<int64_t>(result->size() - outputMutationStart);
+			debugStats->decodeSeconds += now() - decodeStart;
+		}
 	} catch (Error& e) {
+		if (debugStats != nullptr) {
+			debugStats->decodeSeconds += now() - decodeStart;
+		}
 		TraceEvent(e.code() == error_code_restore_missing_data ? SevWarn : SevError, "BA_DecodeBackupLogValue")
 		    .error(e)
 		    .GetLastError()
@@ -772,7 +877,8 @@ ACTOR Future<Void> sendCommitTransactionRequest(CommitTransactionRequest req,
                                                 FlowLock* commitLock,
                                                 PublicRequestStream<CommitTransactionRequest> commit,
                                                 bool tenantMapChanging,
-                                                bool provisionalProxy) {
+                                                bool provisionalProxy,
+                                                DRDebugApplyStats* debugStats) {
 	Key applyBegin = uid.withPrefix(applyMutationsBeginRange.begin);
 	Key versionKey = BinaryWriter::toValue(newBeginVersion, Unversioned());
 	Key rangeEnd = getApplyKey(newBeginVersion, uid);
@@ -800,6 +906,15 @@ ACTOR Future<Void> sendCommitTransactionRequest(CommitTransactionRequest req,
 	state int lockWaitersAtSend = commitLock->waiters();
 	state int mutationCount = req.transaction.mutations.size();
 	state int commitRequestBytes = getBytes(req);
+	if (debugStats != nullptr) {
+		debugStats->commitRequests++;
+		debugStats->commitRequestBytes += commitRequestBytes;
+		debugStats->commitMutations += mutationCount;
+		debugStats->commitMutationBytes += *mutationSize;
+		if (tenantMapChanging) {
+			debugStats->tenantMapChangingBatches++;
+		}
+	}
 	state Future<CommitID> commitReply = commit.getReply(req);
 	addActor.send(traceApplyMutationCommit(commitReply,
 	                                       commitLock,
@@ -832,7 +947,8 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
                                               FlowLock* commitLock,
                                               Reference<KeyRangeMap<Version>> keyVersion,
                                               std::map<int64_t, TenantName>* tenantMap,
-                                              bool provisionalProxy) {
+                                              bool provisionalProxy,
+                                              DRDebugApplyStats* debugStats) {
 	state Version lastVersion = invalidVersion;
 	state bool endOfStream = false;
 	state int totalBytes = 0;
@@ -843,7 +959,15 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 		state bool tenantMapChanging = false;
 		loop {
 			try {
+				state double readWaitStart = now();
 				state RCGroup group = waitNext(results.getFuture());
+				if (debugStats != nullptr) {
+					debugStats->readWaitCount++;
+					debugStats->readWaitSeconds += now() - readWaitStart;
+					debugStats->readGroups++;
+					debugStats->readRows += static_cast<int64_t>(group.items.size());
+					debugStats->readBytes += group.items.expectedSize();
+				}
 				state CommitTransactionRequest curReq;
 				lock->release(group.items.expectedSize());
 				state int curBatchMutationSize = 0;
@@ -867,7 +991,8 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				                          keyVersion,
 				                          cx,
 				                          tenantMap,
-				                          provisionalProxy));
+				                          provisionalProxy,
+				                          debugStats));
 
 				// A single call to decodeBackupLogValue (above) will only parse mutations from a single transaction,
 				// however in the code below we batch the results across several calls to decodeBackupLogValue and send
@@ -878,25 +1003,26 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				// CommitTransactionRequest. Thus the code below will immediately send any mutations accumulated thus
 				// far if the latest call to decodeBackupLogValue contained a transaction which changed the tenant map
 				// (before processing the mutations which caused the tenant map to change).
-					if (tenantMapChanging && req.transaction.mutations.size()) {
-						// If the tenantMap is changing send the previous CommitTransactionRequest to the CommitProxy
-						TraceEvent("MutationLogRestoreTenantMapChanging").detail("BeginVersion", newBeginVersion);
-						CODE_PROBE(true, "mutation log tenant map changing");
-						wait(sendCommitTransactionRequest(req,
-						                                  uid,
-						                                  newBeginVersion,
-						                                  rangeBegin,
-						                                  committedVersion,
-						                                  &totalBytes,
-						                                  &mutationSize,
-						                                  addActor,
-						                                  commitLock,
-						                                  commit,
-						                                  true,
-						                                  provisionalProxy));
-						req = CommitTransactionRequest();
-						mutationSize = 0;
-					}
+				if (tenantMapChanging && req.transaction.mutations.size()) {
+					// If the tenantMap is changing send the previous CommitTransactionRequest to the CommitProxy
+					TraceEvent("MutationLogRestoreTenantMapChanging").detail("BeginVersion", newBeginVersion);
+					CODE_PROBE(true, "mutation log tenant map changing");
+					wait(sendCommitTransactionRequest(req,
+					                                  uid,
+					                                  newBeginVersion,
+					                                  rangeBegin,
+					                                  committedVersion,
+					                                  &totalBytes,
+					                                  &mutationSize,
+					                                  addActor,
+					                                  commitLock,
+					                                  commit,
+					                                  true,
+					                                  provisionalProxy,
+					                                  debugStats));
+					req = CommitTransactionRequest();
+					mutationSize = 0;
+				}
 
 				state int i;
 				for (i = 0; i < curReq.transaction.mutations.size(); i++) {
@@ -916,6 +1042,9 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				}
 			} catch (Error& e) {
 				if (e.code() == error_code_end_of_stream) {
+					if (debugStats != nullptr) {
+						debugStats->endOfStream = true;
+					}
 					if (endVersion.present() && endVersion.get() > lastVersion && endVersion.get() > newBeginVersion) {
 						newBeginVersion = endVersion.get();
 					}
@@ -938,7 +1067,8 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 			                                  commitLock,
 			                                  commit,
 			                                  tenantMapChanging,
-			                                  provisionalProxy));
+			                                  provisionalProxy,
+			                                  debugStats));
 		if (endOfStream) {
 			return totalBytes;
 		}
@@ -1020,7 +1150,12 @@ ACTOR Future<Void> applyMutations(Database cx,
 				}
 			}
 
-			int rangeCount = std::max(1, CLIENT_KNOBS->APPLY_MAX_LOCK_BYTES / maxBytes);
+			state double windowStart = now();
+			state Version windowBeginVersion = beginVersion;
+			state int maxBytesAtWindowStart = maxBytes;
+			state DRDebugApplyStats windowStats;
+			state int64_t windowBytes = 0;
+			state int rangeCount = std::max(1, CLIENT_KNOBS->APPLY_MAX_LOCK_BYTES / maxBytes);
 			state Version newEndVersion = std::min(*endVersion,
 			                                       ((beginVersion / CLIENT_KNOBS->APPLY_BLOCK_SIZE) + rangeCount) *
 			                                           CLIENT_KNOBS->APPLY_BLOCK_SIZE);
@@ -1038,7 +1173,17 @@ ACTOR Future<Void> applyMutations(Database cx,
 			}
 
 			maxBytes = std::max<int>(maxBytes * CLIENT_KNOBS->APPLY_MAX_DECAY_RATE, CLIENT_KNOBS->APPLY_MIN_LOCK_BYTES);
+			state int maxBytesAfterDecay = maxBytes;
 			for (idx = 0; idx < ranges.size(); ++idx) {
+				state int maxBytesBeforeRange = maxBytes;
+				state Version rangeVBlock =
+				    beginVersion / CLIENT_KNOBS->APPLY_BLOCK_SIZE + static_cast<Version>(idx);
+				state Version rangeBeginVersion =
+				    std::max<Version>(beginVersion, rangeVBlock * CLIENT_KNOBS->APPLY_BLOCK_SIZE);
+				state Version rangeEndVersion =
+				    std::min<Version>(newEndVersion, (rangeVBlock + 1) * CLIENT_KNOBS->APPLY_BLOCK_SIZE);
+				state DRDebugApplyStats rangeStats;
+				state double rangeStart = now();
 				int bytes =
 				    wait(kvMutationLogToTransactions(cx,
 				                                     results[idx],
@@ -1054,14 +1199,94 @@ ACTOR Future<Void> applyMutations(Database cx,
 				                                     &commitLock,
 				                                     keyVersion,
 				                                     tenantMap,
-				                                     provisionalProxy));
+				                                     provisionalProxy,
+				                                     &rangeStats));
 				maxBytes = std::max<int>(CLIENT_KNOBS->APPLY_MAX_INCREASE_FACTOR * bytes, maxBytes);
+				windowBytes += bytes;
+				addDRDebugApplyStats(&windowStats, rangeStats);
+				TraceEvent("DBA_DRDebugApplyRange")
+				    .detail("LogUID", uid)
+				    .detail("WindowBeginVersion", windowBeginVersion)
+				    .detail("WindowEndVersion", newEndVersion)
+				    .detail("RangeBeginVersion", rangeBeginVersion)
+				    .detail("RangeEndVersion", rangeEndVersion)
+				    .detail("RangeIndex", static_cast<int64_t>(idx))
+				    .detail("RangeCount", static_cast<int64_t>(ranges.size()))
+				    .detail("RangeSeconds", now() - rangeStart)
+				    .detail("ReturnedBytes", bytes)
+				    .detail("MaxBytesBeforeRange", maxBytesBeforeRange)
+				    .detail("MaxBytesAfterRange", maxBytes)
+				    .detail("EndOfStream", rangeStats.endOfStream)
+				    .detail("ReadWaitCount", rangeStats.readWaitCount)
+				    .detail("ReadWaitSeconds", rangeStats.readWaitSeconds)
+				    .detail("ReadGroups", rangeStats.readGroups)
+				    .detail("ReadRows", rangeStats.readRows)
+				    .detail("ReadBytes", rangeStats.readBytes)
+				    .detail("DecodeCalls", rangeStats.decodeCalls)
+				    .detail("DecodeSeconds", rangeStats.decodeSeconds)
+				    .detail("DecodeInputBytes", rangeStats.decodeInputBytes)
+				    .detail("DecodeLogMutations", rangeStats.decodeLogMutations)
+				    .detail("DecodeOutputMutations", rangeStats.decodeOutputMutations)
+				    .detail("DecodeEncryptedMutations", rangeStats.decodeEncryptedMutations)
+				    .detail("DecodeTenantSkippedMutations", rangeStats.decodeTenantSkippedMutations)
+				    .detail("DecodeCipherKeyFetches", rangeStats.decodeCipherKeyFetches)
+				    .detail("DecodeConfigFetchSeconds", rangeStats.decodeConfigFetchSeconds)
+				    .detail("DecodeCipherKeyFetchSeconds", rangeStats.decodeCipherKeyFetchSeconds)
+				    .detail("TenantModeRequired", rangeStats.tenantModeRequired)
+				    .detail("EncryptionEnabled", rangeStats.encryptionEnabled)
+				    .detail("ClusterAwareEncryption", rangeStats.clusterAwareEncryption)
+				    .detail("ConfigurableEncryption", rangeStats.configurableEncryption)
+				    .detail("CommitRequests", rangeStats.commitRequests)
+				    .detail("CommitRequestBytes", rangeStats.commitRequestBytes)
+				    .detail("CommitMutations", rangeStats.commitMutations)
+				    .detail("CommitMutationBytes", rangeStats.commitMutationBytes)
+				    .detail("TenantMapChangingBatches", rangeStats.tenantMapChangingBatches);
 				if (error.isError())
 					throw error.getError();
 			}
 
+			state double coalesceStart = now();
 			wait(coalesceKeyVersionCache(
 			    uid, newEndVersion, keyVersion, commit, committedVersion, addActor, &commitLock));
+			state double coalesceSeconds = now() - coalesceStart;
+			TraceEvent("DBA_DRDebugApplyWindow")
+			    .detail("LogUID", uid)
+			    .detail("BeginVersion", windowBeginVersion)
+			    .detail("EndVersion", newEndVersion)
+			    .detail("TargetEndVersion", *endVersion)
+			    .detail("WindowSeconds", now() - windowStart)
+			    .detail("CoalesceSeconds", coalesceSeconds)
+			    .detail("ConfiguredRangeCount", rangeCount)
+			    .detail("ActualRangeCount", static_cast<int64_t>(ranges.size()))
+			    .detail("MaxBytesAtWindowStart", maxBytesAtWindowStart)
+			    .detail("MaxBytesAfterDecay", maxBytesAfterDecay)
+			    .detail("MaxBytesAtWindowEnd", maxBytes)
+			    .detail("ReturnedBytes", windowBytes)
+			    .detail("EndOfStream", windowStats.endOfStream)
+			    .detail("ReadWaitCount", windowStats.readWaitCount)
+			    .detail("ReadWaitSeconds", windowStats.readWaitSeconds)
+			    .detail("ReadGroups", windowStats.readGroups)
+			    .detail("ReadRows", windowStats.readRows)
+			    .detail("ReadBytes", windowStats.readBytes)
+			    .detail("DecodeCalls", windowStats.decodeCalls)
+			    .detail("DecodeSeconds", windowStats.decodeSeconds)
+			    .detail("DecodeInputBytes", windowStats.decodeInputBytes)
+			    .detail("DecodeLogMutations", windowStats.decodeLogMutations)
+			    .detail("DecodeOutputMutations", windowStats.decodeOutputMutations)
+			    .detail("DecodeEncryptedMutations", windowStats.decodeEncryptedMutations)
+			    .detail("DecodeTenantSkippedMutations", windowStats.decodeTenantSkippedMutations)
+			    .detail("DecodeCipherKeyFetches", windowStats.decodeCipherKeyFetches)
+			    .detail("DecodeConfigFetchSeconds", windowStats.decodeConfigFetchSeconds)
+			    .detail("DecodeCipherKeyFetchSeconds", windowStats.decodeCipherKeyFetchSeconds)
+			    .detail("TenantModeRequired", windowStats.tenantModeRequired)
+			    .detail("EncryptionEnabled", windowStats.encryptionEnabled)
+			    .detail("ClusterAwareEncryption", windowStats.clusterAwareEncryption)
+			    .detail("ConfigurableEncryption", windowStats.configurableEncryption)
+			    .detail("CommitRequests", windowStats.commitRequests)
+			    .detail("CommitRequestBytes", windowStats.commitRequestBytes)
+			    .detail("CommitMutations", windowStats.commitMutations)
+			    .detail("CommitMutationBytes", windowStats.commitMutationBytes)
+			    .detail("TenantMapChangingBatches", windowStats.tenantMapChangingBatches);
 			beginVersion = newEndVersion;
 			if (BUGGIFY) {
 				wait(delay(2.0));
