@@ -362,6 +362,7 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
                                                Key removePrefix,
                                                Version version,
                                                Reference<KeyRangeMap<Version>> key_version,
+                                               DatabaseConfiguration config,
                                                Database cx,
                                                std::map<int64_t, TenantName>* tenantMap,
                                                bool provisionalProxy,
@@ -395,20 +396,6 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			throw restore_missing_data();
 
 		state int originalOffset = offset;
-		state double configFetchStart = now();
-		state DatabaseConfiguration config = wait(getDatabaseConfiguration(cx));
-		if (debugStats != nullptr) {
-			debugStats->decodeConfigFetchSeconds += now() - configFetchStart;
-			debugStats->tenantModeRequired =
-			    debugStats->tenantModeRequired || config.tenantMode == TenantMode::REQUIRED;
-			debugStats->encryptionEnabled =
-			    debugStats->encryptionEnabled || config.encryptionAtRestMode.isEncryptionEnabled();
-			debugStats->clusterAwareEncryption =
-			    debugStats->clusterAwareEncryption ||
-			    config.encryptionAtRestMode.mode == EncryptionAtRestMode::CLUSTER_AWARE;
-			debugStats->configurableEncryption =
-			    debugStats->configurableEncryption || CLIENT_KNOBS->ENABLE_CONFIGURABLE_ENCRYPTION;
-		}
 		state KeyRangeRef tenantMapRange = TenantMetadata::tenantMap().subspace;
 
 		while (consumed < totalBytes) {
@@ -946,12 +933,22 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
                                               PromiseStream<Future<Void>> addActor,
                                               FlowLock* commitLock,
                                               Reference<KeyRangeMap<Version>> keyVersion,
+                                              DatabaseConfiguration config,
                                               std::map<int64_t, TenantName>* tenantMap,
                                               bool provisionalProxy,
                                               DRDebugApplyStats* debugStats) {
 	state Version lastVersion = invalidVersion;
 	state bool endOfStream = false;
 	state int totalBytes = 0;
+	if (debugStats != nullptr) {
+		debugStats->tenantModeRequired = debugStats->tenantModeRequired || config.tenantMode == TenantMode::REQUIRED;
+		debugStats->encryptionEnabled =
+		    debugStats->encryptionEnabled || config.encryptionAtRestMode.isEncryptionEnabled();
+		debugStats->clusterAwareEncryption =
+		    debugStats->clusterAwareEncryption || config.encryptionAtRestMode.mode == EncryptionAtRestMode::CLUSTER_AWARE;
+		debugStats->configurableEncryption =
+		    debugStats->configurableEncryption || CLIENT_KNOBS->ENABLE_CONFIGURABLE_ENCRYPTION;
+	}
 	loop {
 		state CommitTransactionRequest req;
 		state Version newBeginVersion = invalidVersion;
@@ -989,6 +986,7 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				                          removePrefix,
 				                          group.groupKey,
 				                          keyVersion,
+				                          config,
 				                          cx,
 				                          tenantMap,
 				                          provisionalProxy,
@@ -1141,6 +1139,7 @@ ACTOR Future<Void> applyMutations(Database cx,
 	keyVersion->insert(metadataVersionKey, 0);
 
 	try {
+		state DatabaseConfiguration config = wait(getDatabaseConfiguration(cx));
 		loop {
 			if (beginVersion >= *endVersion) {
 				wait(commitLock.take(TaskPriority::DefaultYield, CLIENT_KNOBS->BACKUP_LOCK_BYTES));
@@ -1198,6 +1197,7 @@ ACTOR Future<Void> applyMutations(Database cx,
 				                                     addActor,
 				                                     &commitLock,
 				                                     keyVersion,
+				                                     config,
 				                                     tenantMap,
 				                                     provisionalProxy,
 				                                     &rangeStats));
