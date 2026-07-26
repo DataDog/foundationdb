@@ -22,6 +22,7 @@
 
 import re
 import sys
+import platform as platform_module
 
 (platform, source, asm, h) = sys.argv[1:]
 
@@ -79,6 +80,21 @@ def write_unix_asm(asmfile, functions, prefix):
         asmfile.write("\tjmp r11\n")
 
 
+def write_linux_arm64_asm(asmfile, functions):
+    asmfile.write(".text\n")
+
+    for f in functions:
+        asmfile.write("\t.global %s\n\t.type %s, %%function\n" % (f, f))
+
+    for f in functions:
+        asmfile.write("\n.globl %s\n" % f)
+        asmfile.write("%s:\n" % f)
+        asmfile.write("\tadrp x16, :got:fdb_api_ptr_%s\n" % f)
+        asmfile.write("\tldr x16, [x16, :got_lo12:fdb_api_ptr_%s]\n" % f)
+        asmfile.write("\tldr x16, [x16]\n")
+        asmfile.write("\tbr x16\n")
+
+
 with open(asm, 'w') as asmfile:
     with open(h, 'w') as hfile:
         hfile.write(
@@ -87,7 +103,11 @@ with open(asm, 'w') as asmfile:
             "void fdb_api_ptr_removed() { fprintf(stderr, \"REMOVED FDB API FUNCTION\\n\"); abort(); }\n\n")
 
         if platform == "linux":
-            write_unix_asm(asmfile, functions, '')
+            machine = platform_module.machine().lower()
+            if machine in ("aarch64", "arm64"):
+                write_linux_arm64_asm(asmfile, functions)
+            else:
+                write_unix_asm(asmfile, functions, '')
         elif platform == "osx":
             write_unix_asm(asmfile, functions, '_')
         elif platform == "windows":

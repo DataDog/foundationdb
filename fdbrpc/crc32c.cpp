@@ -29,13 +29,25 @@
 
 #define NOMINMAX
 
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 #include <nmmintrin.h>
+#define FDB_USE_X86_CRC32C 1
+#else
+#define FDB_USE_X86_CRC32C 0
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <random>
 #include <algorithm>
 #include "fdbrpc/Platform.h"
+#if !FDB_USE_X86_CRC32C
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#endif
 #include "generated-constants.cpp"
+#if !FDB_USE_X86_CRC32C
+#pragma GCC diagnostic pop
+#endif
 
 static uint32_t append_trivial(uint32_t crc, const uint8_t * input, size_t length)
 {
@@ -171,6 +183,7 @@ static inline uint32_t shift_crc(uint32_t shift_table[][256], uint32_t crc)
 }
 
 /* Compute CRC-32C using the Intel hardware instruction. */
+#if FDB_USE_X86_CRC32C
 #if defined(__clang__) || defined(__GNUG__)
 __attribute__((target("sse4.2")))
 #endif
@@ -312,14 +325,18 @@ static uint32_t append_hw(uint32_t crc, const uint8_t * buf, size_t len)
     /* return a post-processed crc */
     return static_cast<uint32_t>(crc0) ^ 0xffffffff;
 }
+#endif
 
-
+#if FDB_USE_X86_CRC32C
 static bool hw_available = platform::isSse42Supported();
+#endif
 
 extern "C" uint32_t crc32c_append(uint32_t crc, const uint8_t * input, size_t length)
 {
+#if FDB_USE_X86_CRC32C
     if (hw_available)
         return append_hw(crc, input, length);
     else
+#endif
         return append_table(crc, input, length);
 }
