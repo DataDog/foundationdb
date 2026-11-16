@@ -1,0 +1,115 @@
+2026-11-13T10:49:27Z run dir: /Users/baptiste.merliot/dd/foundationdb/restore-bench/runs/20261113T104927Z-baseline-single-ssd-debug2
+2026-11-13T10:49:29Z teardown
+deployment.apps/foundationdb-historical-metrics-devkube-toolbox scaled
+2026-11-13T10:49:33Z bootstrap: devkube apply brings the fdb StatefulSet to 1 pod, with knobs: none
+2026-11-13T10:49:33Z devkube apply historical-metrics-foundationdb
+CONF_FILE set to: /Users/baptiste.merliot/.config/devkube/config.yaml
+computed platform is darwin-d25-arm64
+bazel real is /Users/baptiste.merliot/Library/Caches/bazelisk/downloads/sha256/ae640432a3fdb8a08c637562895f91c7ff1f63f04b1a9d34de9e9c46162bc10b/bin/bazel
+running ['/Users/baptiste.merliot/go/src/github.com/DataDog/k8s-resources/tools/bazel', '--bazelrc=/var/folders/z7/ngrj5lvj7q5bjhnfpbmc61vh0000gp/T/2608361289.bazelrc', 'run', '//k8s/foundationdb:devkube-historical-metrics.entei.us1.staging.dog_manifest', '--define', 'namespace=devenv-baptiste-merliot', '--bes_backend=grpc://127.0.0.1:58978']
+WARNING: Option 'experimental_downloader_config' is deprecated: Use --downloader_config instead
+Computing main repo mapping: 
+WARNING: Option 'experimental_downloader_config' is deprecated: Use --downloader_config instead
+Loading: 
+Loading: 0 packages loaded
+Analyzing: target //k8s/foundationdb:devkube-historical-metrics.entei.us1.staging.dog_manifest (1 packages loaded, 0 targets configured)
+Analyzing: target //k8s/foundationdb:devkube-historical-metrics.entei.us1.staging.dog_manifest (1 packages loaded, 0 targets configured)
+
+INFO: Analyzed target //k8s/foundationdb:devkube-historical-metrics.entei.us1.staging.dog_manifest (176 packages loaded, 12482 targets configured).
+[32 / 40] Action k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_values.json; 0s darwin-sandbox ... (3 actions running)
+[39 / 40] RenderHelmManifest k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml; 0s darwin-sandbox
+INFO: From RenderHelmManifest k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml:
+time="2026-11-13T11:49:41+01:00" level=info msg="adding environments provider"
+time="2026-11-13T11:49:41+01:00" level=info msg="adding devenv namespace filter provider"
+time="2026-11-13T11:49:41+01:00" level=info msg="strategy is replace, setting up new providers set"
+time="2026-11-13T11:49:41+01:00" level=info msg="adding file reference provider for values file bazel-out/darwin_arm64-fastbuild/bin/k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_values.json"
+time="2026-11-13T11:49:41+01:00" level=info msg="adding datacenter metadata values provider"
+time="2026-11-13T11:49:41+01:00" level=info msg="adding cluster metadata values provider"
+time="2026-11-13T11:49:41+01:00" level=info msg="[datacenter provider] initializing new placement client"
+time="2026-11-13T11:49:42+01:00" level=info msg="[datacenter provider] could not initialize placement client: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:49:42+01:00" level=info msg="[datacenter provider] not fetching additional datacenter metadata, placement client unavailable: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:49:42+01:00" level=info msg="[cluster provider] initializing new placement client"
+time="2026-11-13T11:49:42+01:00" level=info msg="[cluster provider] could not initialize placement client: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:49:42+01:00" level=info msg="[cluster provider] not fetching additional cluster metadata, placement client unavailable: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+INFO: Found 1 target...
+Target //k8s/foundationdb:devkube-historical-metrics.entei.us1.staging.dog_manifest up-to-date:
+  bazel-bin/k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml
+INFO: Elapsed time: 4.088s, Critical Path: 2.10s
+INFO: 13 processes: 29 action cache hit, 4 internal, 9 darwin-sandbox.
+INFO: Build completed successfully, 13 total actions
+INFO: 
+INFO: Running command line: env GOPROXY="https://depot-read-api-go.us1.ddbuild.io/magicmirror/magicmirror/@current/|https://depot-read-api-go.us1.ddbuild.io/magicmirror/testing/@current/|direct" GONOSUMDB="github.com/DataDog,github.com/ddoghq,go.ddbuild.io" GOPRIVATE="" bazel-bin/k8s/foundationdb/devkube-historical-metrics.entei.us1.staging.dog_manifest
+poddisruptionbudget.policy/foundationdb-historical-metrics-devkube-unset configured
+serviceaccount/foundationdb-historical-metrics unchanged
+configmap/foundationdb-historical-metrics-devkube-unset unchanged
+configmap/foundationdb-historical-metrics-devkube-unset-vaultd unchanged
+configmap/foundationdb-historical-metrics-devkube-fabric unchanged
+role.rbac.authorization.k8s.io/foundationdb-historical-metrics-role unchanged
+rolebinding.rbac.authorization.k8s.io/foundationdb-historical-metrics-binding configured
+service/foundationdb-historical-metrics-devkube unchanged
+statefulset.apps/foundationdb-historical-metrics-devkube-unset created
+2026-11-13T10:52:29Z devkube apply historical-metrics-foundationdb-toolbox
+CONF_FILE set to: /Users/baptiste.merliot/.config/devkube/config.yaml
+computed platform is darwin-d25-arm64
+bazel real is /Users/baptiste.merliot/Library/Caches/bazelisk/downloads/sha256/ae640432a3fdb8a08c637562895f91c7ff1f63f04b1a9d34de9e9c46162bc10b/bin/bazel
+running ['/Users/baptiste.merliot/go/src/github.com/DataDog/k8s-resources/tools/bazel', '--bazelrc=/var/folders/z7/ngrj5lvj7q5bjhnfpbmc61vh0000gp/T/776924520.bazelrc', 'run', '//k8s/foundationdb-toolbox:devkube-historical-metrics.entei.us1.staging.dog_manifest', '--define', 'namespace=devenv-baptiste-merliot', '--bes_backend=grpc://127.0.0.1:59149']
+WARNING: Option 'experimental_downloader_config' is deprecated: Use --downloader_config instead
+Computing main repo mapping: 
+WARNING: Option 'experimental_downloader_config' is deprecated: Use --downloader_config instead
+Loading: 
+Loading: 0 packages loaded
+Analyzing: target //k8s/foundationdb-toolbox:devkube-historical-metrics.entei.us1.staging.dog_manifest (1 packages loaded, 0 targets configured)
+Analyzing: target //k8s/foundationdb-toolbox:devkube-historical-metrics.entei.us1.staging.dog_manifest (1 packages loaded, 0 targets configured)
+
+INFO: Analyzed target //k8s/foundationdb-toolbox:devkube-historical-metrics.entei.us1.staging.dog_manifest (1 packages loaded, 48 targets configured).
+[41 / 42] RenderHelmManifest k8s/foundationdb-toolbox/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml; 0s darwin-sandbox
+INFO: From RenderHelmManifest k8s/foundationdb-toolbox/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml:
+time="2026-11-13T11:52:35+01:00" level=info msg="adding environments provider"
+time="2026-11-13T11:52:35+01:00" level=info msg="adding devenv namespace filter provider"
+time="2026-11-13T11:52:35+01:00" level=info msg="strategy is replace, setting up new providers set"
+time="2026-11-13T11:52:35+01:00" level=info msg="adding file reference provider for values file bazel-out/darwin_arm64-fastbuild/bin/k8s/foundationdb-toolbox/devkube-historical-metrics.entei.us1.staging.dog_values.json"
+time="2026-11-13T11:52:35+01:00" level=info msg="adding datacenter metadata values provider"
+time="2026-11-13T11:52:35+01:00" level=info msg="adding cluster metadata values provider"
+time="2026-11-13T11:52:35+01:00" level=info msg="[datacenter provider] initializing new placement client"
+time="2026-11-13T11:52:36+01:00" level=info msg="[datacenter provider] could not initialize placement client: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:52:36+01:00" level=info msg="[datacenter provider] not fetching additional datacenter metadata, placement client unavailable: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:52:36+01:00" level=info msg="[cluster provider] initializing new placement client"
+time="2026-11-13T11:52:36+01:00" level=info msg="[cluster provider] could not initialize placement client: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+time="2026-11-13T11:52:36+01:00" level=info msg="[cluster provider] not fetching additional cluster metadata, placement client unavailable: setting up RMS client: error getting RMS token: no ddtool found and not in Kubernetes"
+INFO: Found 1 target...
+Target //k8s/foundationdb-toolbox:devkube-historical-metrics.entei.us1.staging.dog_manifest up-to-date:
+  bazel-bin/k8s/foundationdb-toolbox/devkube-historical-metrics.entei.us1.staging.dog_manifest.yaml
+INFO: Elapsed time: 2.745s, Critical Path: 2.01s
+INFO: 7 processes: 10 action cache hit, 2 internal, 5 darwin-sandbox.
+INFO: Build completed successfully, 7 total actions
+INFO: 
+INFO: Running command line: env GOPROXY="https://depot-read-api-go.us1.ddbuild.io/magicmirror/magicmirror/@current/|https://depot-read-api-go.us1.ddbuild.io/magicmirror/testing/@current/|direct" GONOSUMDB="github.com/DataDog,github.com/ddoghq,go.ddbuild.io" GOPRIVATE="" bazel-bin/k8s/foundationdb-toolbox/devkube-historical-metrics.entei.us1.staging.dog_manifest
+serviceaccount/foundationdb-historical-metrics-toolbox unchanged
+configmap/foundationdb-historical-metrics-devkube-toolbox-templates unchanged
+configmap/foundationdb-historical-metrics-devkube-toolbox-init unchanged
+configmap/foundationdb-historical-metrics-devkube-toolbox-vaultd unchanged
+configmap/foundationdb-historical-metrics-devkube-toolbox-fabric unchanged
+role.rbac.authorization.k8s.io/foundationdb-historical-metrics-toolbox-role unchanged
+rolebinding.rbac.authorization.k8s.io/foundationdb-historical-metrics-toolbox-role-binding configured
+service/foundationdb-historical-metrics-devkube-toolbox unchanged
+deployment.apps/foundationdb-historical-metrics-devkube-toolbox configured
+ciliumnetworkpolicy.cilium.io/foundationdb-toolbox unchanged
+2026-11-13T10:58:49Z scaling to 9 fdb pods
+statefulset.apps/foundationdb-historical-metrics-devkube-unset scaled
+Configuration changed
+E1113 12:28:27.895294   48569 memcache.go:381] "Couldn't get current server API group list" err="Get \"https://k8s-entei.us1.staging.dog/api?timeout=32s\": dial tcp 10.128.115.111:443: connect: operation timed out"
+E1113 12:45:07.467247   48569 memcache.go:381] "Couldn't get current server API group list" err="Get \"https://k8s-entei.us1.staging.dog/api?timeout=32s\": dial tcp 10.128.158.99:443: i/o timeout"
+Unable to connect to the server: dial tcp 10.128.115.111:443: i/o timeout
+2026-11-13T11:45:37Z ERROR: unexpected /status output: 
+2026-11-13T11:45:37Z WARNING: fewer than 5 coordinators after 15 min (toolbox reconciler off?), continuing
+2026-11-13T12:05:41Z stability: generation 6, moving bytes 0, stable polls 0/8
+2026-11-13T12:06:00Z stability: generation 6, moving bytes 0, stable polls 1/8
+2026-11-13T12:06:18Z stability: generation 6, moving bytes 0, stable polls 2/8
+2026-11-13T12:06:35Z stability: generation 6, moving bytes 0, stable polls 3/8
+2026-11-13T12:06:53Z stability: generation 6, moving bytes 0, stable polls 4/8
+2026-11-13T12:07:11Z stability: generation 6, moving bytes 0, stable polls 5/8
+2026-11-13T12:07:29Z stability: generation 6, moving bytes 0, stable polls 6/8
+2026-11-13T12:07:48Z stability: generation 6, moving bytes 0, stable polls 7/8
+2026-11-13T12:08:06Z stability: generation 6, moving bytes 0, stable polls 8/8
+2026-11-13T12:08:17Z fresh cluster ready with variant baseline (single, ssd): no knobs
+Data distribution is enabled for rebalance.

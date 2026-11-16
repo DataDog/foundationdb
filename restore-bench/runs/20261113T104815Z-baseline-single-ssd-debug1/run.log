@@ -1,0 +1,28 @@
+2026-11-13T10:48:15Z run dir: /Users/baptiste.merliot/dd/foundationdb/restore-bench/runs/20261113T104815Z-baseline-single-ssd-debug1
+2026-11-13T10:48:17Z teardown
+deployment.apps/foundationdb-historical-metrics-devkube-toolbox scaled
+2026-11-13T10:48:20Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-0
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-0" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:21Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-1
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-1" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:22Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-2
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-2" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:23Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-3
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-3" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:24Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-4
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-4" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:25Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-5
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-5" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:26Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-6
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-6" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:27Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-7
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-7" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:28Z deleting pvc foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-8
+persistentvolumeclaim "foundationdb-historical-metrics-devkube-local-foundationdb-historical-metrics-devkube-unset-8" deleted from devenv-baptiste-merliot namespace
+2026-11-13T10:48:29Z bootstrap: devkube apply brings the fdb StatefulSet to 1 pod, with knobs: none
+2026-11-13T10:48:29Z devkube apply historical-metrics-foundationdb
+CONF_FILE set to: /Users/baptiste.merliot/.config/devkube/config.yaml
+error: ERR: Your current kubectl context is set to oddish-a.us1.staging.dog, but devkube is configured to use entei.us1.staging.dog.
+error: This may result in unintended consequences. Consider switching to your devkube cluster before proceeding.
+Do you want to switch Kubernetes context? (Y/n) 
+Aborted!
