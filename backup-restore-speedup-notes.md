@@ -9,6 +9,15 @@ Read this first if you are picking the work up.
 
 ### Where things stand
 
+- **Current approach (supersedes the scripts below):** `restore-bench/commands.sh`, a command sheet run by hand, with every value written out (no variables). It has 4 steps, each covering the 7 `fdb-test-bench-<variant>` clusters at once:
+  1. **Creation:** Atlas `CreateCluster` for each cluster (`skipPrs: true`, no dynamic deployment, `kubernetesCluster: oddish`, 9 nodes, `three_data_hall`, `ssd`, 7.3.77, no backup), then watch them.
+  2. **Config update:** status, knob checks, and `datadistribution enable/disable rebalance` via `fdbcli` in the toolbox container.
+  3. **Restore:** per cluster, pause the oddish-b/c toolboxes, then start the restore (latest restorable version) through the oddish-a toolbox, which resumes itself after the start. Then poll `/restore/status` for all clusters. The 7 restores run concurrently and share the backup bucket's bandwidth and possibly nodes.
+     - **3b. After the restore:** once all are `completed`, resume the oddish-b/c toolboxes.
+  4. **Deletion:** Atlas `DeleteCluster` for each cluster (no dynamic deployment, PRs not skipped: each opens its usual `k8s-resources` PR, which may remove the cluster config), then watch them.
+
+  Knobs come from the user's committed per-cluster values files in `k8s-resources` (`k8s/foundationdb/values/clusters/fdb-test-bench-*._._.us1.staging.dog.yaml` and the `clusters.bzl` entries, branch `baptiste.merliot/backup-restore-bench-clusters`). They must be merged before creation, since creation deploys from them. The `run.sh`/`create.sh`/… scripts and the review loop below describe the earlier, fully scripted approach.
+
 - **Analysis done:** sections below (why restores repartition, Options A/B, metrics). Option A is benchmarked as the `minimize-data-movement` variant.
 - **Benchmark scripts written** in `~/dd/foundationdb/restore-bench/` for a real staging cluster (`oddish-a.us1.staging.dog`, namespace `hmq-test`), created and deleted per run with Atlas workflows. See "Benchmark setup" below.
 - **Nothing has run on staging yet.** The only runs so far were on devkube, abandoned because it was too far from a real setup (see "Lessons from the devkube debug runs"). `runs/` holds those partial debug runs; they are not comparable with staging results.
