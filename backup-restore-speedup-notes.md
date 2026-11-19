@@ -10,13 +10,20 @@ Read this first if you are picking the work up.
 ### Where things stand
 
 - **Current approach (supersedes the scripts below):** `restore-bench/commands.sh`, a command sheet run by hand, with every value written out (no variables). It has 4 steps, each covering the 7 `fdb-test-bench-<variant>` clusters at once:
-  1. **Creation:** Atlas `CreateCluster` for each cluster (`skipPrs: true`, no dynamic deployment, `kubernetesCluster: oddish`, 9 nodes, `three_data_hall`, `ssd`, 7.3.77, no backup), then watch them.
-  2. **Config update:** status, knob checks, and `datadistribution enable/disable rebalance` via `fdbcli` in the toolbox container.
+  1. **Creation:** Atlas `CreateCluster` for each cluster (`skipPrs: true`, no dynamic deployment, `kubernetesCluster: oddish`, 27 nodes (9 per zone, 81 processes), `three_data_hall`, Redwood, 7.3.77, no backup), then watch them.
+  2. **Config update:** per cluster:
+     - reconciler dry-run (`POST /reconciler/config -F dryrun=true`) on the 3 toolboxes. Otherwise autotune reverts `three_data_hall_fallback` and re-assigns classes. This is in memory only, so a toolbox restart resets it;
+     - `configure three_data_hall_fallback logs=6 commit_proxies=6`;
+     - one class per process via `setclass`, built from the status with jq. Per zone, pods sorted by machineid: pods 0-4 are 3× storage, pods 5-6 are log + commit_proxy + stateless, pods 7-8 are 3× stateless. That gives 45 storage, 6 log, 6 commit_proxy, 24 stateless;
+     - checks: configuration, class counts, each knob present on 81 processes;
+     - `datadistribution enable/disable rebalance`.
+
+     Creation stays in `three_data_hall` because the creation workflow waits for the reconciler and 9 coordinators.
   3. **Restore:** per cluster, pause the oddish-b/c toolboxes, then start the restore (latest restorable version) through the oddish-a toolbox, which resumes itself after the start. Then poll `/restore/status` for all clusters. The 7 restores run concurrently and share the backup bucket's bandwidth and possibly nodes.
      - **3b. After the restore:** once all are `completed`, resume the oddish-b/c toolboxes.
-  4. **Deletion:** Atlas `DeleteCluster` for each cluster (no dynamic deployment, PRs not skipped: each opens its usual `k8s-resources` PR, which may remove the cluster config), then watch them.
+  4. **Deletion:** Atlas `DeleteCluster` for each cluster (no dynamic deployment, `spec.skipPrs: true`: no `k8s-resources` PR, so the clusters' config must be removed by hand after the benchmark), then watch them.
 
-  Knobs come from the user's committed per-cluster values files in `k8s-resources` (`k8s/foundationdb/values/clusters/fdb-test-bench-*._._.us1.staging.dog.yaml` and the `clusters.bzl` entries, branch `baptiste.merliot/backup-restore-bench-clusters`). They must be merged before creation, since creation deploys from them. The `run.sh`/`create.sh`/… scripts and the review loop below describe the earlier, fully scripted approach.
+  Every values file also sets `knob_target_bytes_per_storage_server: "1500000000"` and `knob_storage_hard_limit_bytes: "2250000000"`. These were added on 2026-11-19 and are uncommitted in `k8s-resources` (the user commits them). Knobs come from the user's committed per-cluster values files in `k8s-resources` (`k8s/foundationdb/values/clusters/fdb-test-bench-*._._.us1.staging.dog.yaml` and the `clusters.bzl` entries, branch `baptiste.merliot/backup-restore-bench-clusters`). They must be merged before creation, since creation deploys from them. The `run.sh`/`create.sh`/… scripts and the review loop below describe the earlier, fully scripted approach.
 
 - **Analysis done:** sections below (why restores repartition, Options A/B, metrics). Option A is benchmarked as the `minimize-data-movement` variant.
 - **Benchmark scripts written** in `~/dd/foundationdb/restore-bench/` for a real staging cluster (`oddish-a.us1.staging.dog`, namespace `hmq-test`), created and deleted per run with Atlas workflows. See "Benchmark setup" below.
